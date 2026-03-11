@@ -21,14 +21,15 @@ import pygame
 
 from settings import (
     GRID_COLS,
-    GRID_ORIGIN_X,
-    GRID_ORIGIN_Y,
     GRID_ROWS,
+    ISO_GRID_OFFSET_X,
+    ISO_GRID_OFFSET_Y,
+    ISO_TILE_H,
+    ISO_TILE_W,
     PLAYER_COLOR,
     PLAYER_FALL_SPEED,
     PLAYER_SIZE,
     PLAYER_SPEED,
-    TILE_SIZE,
 )
 from tile import DISAPPEARED
 
@@ -48,10 +49,10 @@ _MOVE_KEYS = {
 
 
 def _tile_centre(col: int, row: int) -> tuple[float, float]:
-    """Return the pixel centre of a grid tile."""
+    """Return the isometric screen centre of a tile's top diamond face."""
     return (
-        GRID_ORIGIN_X + col * TILE_SIZE + TILE_SIZE / 2,
-        GRID_ORIGIN_Y + row * TILE_SIZE + TILE_SIZE / 2,
+        ISO_GRID_OFFSET_X + (col - row) * (ISO_TILE_W // 2),
+        ISO_GRID_OFFSET_Y + (col + row) * (ISO_TILE_H // 2) + ISO_TILE_H // 2,
     )
 
 
@@ -179,8 +180,18 @@ class Player:
         if self.state == ELIMINATED:
             return
 
-        # Simple coloured square for Week 1 (swap in sprite sheet later)
-        pygame.draw.rect(surface, PLAYER_COLOR, self.rect, border_radius=6)
+        # Draw player as a small isometric diamond sitting on the tile top face.
+        # Raise it slightly above the diamond centre so it reads clearly.
+        ix = int(self.x)
+        iy = int(self.y) - ISO_TILE_H // 4
+        hw = ISO_TILE_W // 4   # diamond half-width  (32 px)
+        hh = ISO_TILE_H // 4   # diamond half-height (16 px)
 
-        # Thin white outline so the player reads well on any tile colour
-        pygame.draw.rect(surface, (255, 255, 255), self.rect, 2, border_radius=6)
+        pts = [
+            (ix,      iy - hh),   # top
+            (ix + hw, iy),        # right
+            (ix,      iy + hh),   # bottom
+            (ix - hw, iy),        # left
+        ]
+        pygame.draw.polygon(surface, PLAYER_COLOR, pts)
+        pygame.draw.polygon(surface, (255, 255, 255), pts, 2)

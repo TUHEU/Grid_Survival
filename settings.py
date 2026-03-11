@@ -13,13 +13,24 @@ BACKGROUND_COLOR = (18, 18, 22)
 TARGET_FPS = 60
 
 # ── Tile & Grid ───────────────────────────────────────────────────────────────
-TILE_SIZE   = 64        # pixels per tile (square)
+TILE_SIZE   = 64        # logical tile unit (used for physics / movement)
 GRID_COLS   = 10        # number of tile columns
 GRID_ROWS   = 6         # number of tile rows
 
-# Grid top-left pixel position — centered in the window
-GRID_ORIGIN_X = (1280 - GRID_COLS * TILE_SIZE) // 2   # 320
-GRID_ORIGIN_Y = (720  - GRID_ROWS * TILE_SIZE) // 2   # 168
+# ── Isometric projection ──────────────────────────────────────────────────────
+ISO_TILE_W     = 128    # screen width of one tile (2:1 ratio, so height = 64)
+ISO_TILE_H     = 64     # screen height of one tile's top-face diamond
+ISO_TILE_DEPTH = 32     # visible side-face height (3-D box depth, px)
+
+# Grid screen origin — isometric north vertex of tile (0, 0), centred on screen.
+# Visual bounding box:
+#   w = (GRID_COLS + GRID_ROWS) * ISO_TILE_W // 2  = 1024 px
+#   h = (GRID_COLS + GRID_ROWS) * ISO_TILE_H // 2
+#       + ISO_TILE_DEPTH                            = 544  px
+_ISO_GRID_W   = (GRID_COLS + GRID_ROWS) * ISO_TILE_W // 2       # 1024
+_ISO_GRID_H   = (GRID_COLS + GRID_ROWS) * ISO_TILE_H // 2 + ISO_TILE_DEPTH  # 544
+ISO_GRID_OFFSET_X = (WINDOW_SIZE[0] - _ISO_GRID_W) // 2 + GRID_ROWS * ISO_TILE_W // 2  # 512
+ISO_GRID_OFFSET_Y = (WINDOW_SIZE[1] - _ISO_GRID_H) // 2                                 # 88
 
 # Tile colours (placeholder until pixel-art assets arrive)
 TILE_COLOR_NORMAL  = ( 72, 160,  72)   # green  – walkable

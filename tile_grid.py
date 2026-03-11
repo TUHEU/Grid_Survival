@@ -12,9 +12,9 @@ import pygame
 
 from settings import (
     GRID_COLS,
-    GRID_ORIGIN_X,
-    GRID_ORIGIN_Y,
     GRID_ROWS,
+    ISO_GRID_OFFSET_X,
+    ISO_GRID_OFFSET_Y,
     TILES_PER_SECOND,
 )
 from tile import DISAPPEARED, NORMAL, Tile
@@ -27,7 +27,7 @@ class TileGrid:
         # 2-D list: self.tiles[row][col]
         self.tiles: list[list[Tile]] = [
             [
-                Tile(col, row, GRID_ORIGIN_X, GRID_ORIGIN_Y)
+                Tile(col, row, ISO_GRID_OFFSET_X, ISO_GRID_OFFSET_Y)
                 for col in range(GRID_COLS)
             ]
             for row in range(GRID_ROWS)
@@ -107,6 +107,10 @@ class TileGrid:
     # ── Draw ────────────────────────────────────────────────────────────────
 
     def draw(self, surface: pygame.Surface) -> None:
-        for row in self.tiles:
-            for tile in row:
-                tile.draw(surface)
+        # Painter's algorithm: back-to-front by ascending (col + row) depth sum
+        all_tiles = sorted(
+            (tile for row in self.tiles for tile in row),
+            key=lambda t: t.col + t.row,
+        )
+        for tile in all_tiles:
+            tile.draw(surface)

@@ -11,14 +11,20 @@ DISAPPEARED: invisible; player standing here will fall.
 import pygame
 
 from settings import (
-    TILE_COLOR_BORDER,
+    ISO_TILE_DEPTH,
+    ISO_TILE_H,
+    ISO_TILE_W,
     TILE_COLOR_NORMAL,
     TILE_COLOR_VOID,
     TILE_COLOR_WARNING,
     TILE_FLASH_RATE,
-    TILE_SIZE,
     TILE_WARNING_TIME,
 )
+
+
+def _shade(color: tuple, factor: float) -> tuple:
+    """Return a brightened or darkened version of *color* by *factor*."""
+    return tuple(min(255, max(0, int(c * factor))) for c in color[:3])
 
 # ── State constants ──────────────────────────────────────────────────────────
 NORMAL      = "normal"
@@ -33,12 +39,16 @@ class Tile:
         self.col = col
         self.row = row
 
-        # Pixel rect for drawing and collision
+        # Isometric north-vertex (topmost point of the tile's top diamond face)
+        self.iso_x: int = origin_x + (col - row) * (ISO_TILE_W // 2)
+        self.iso_y: int = origin_y + (col + row) * (ISO_TILE_H // 2)
+
+        # Axis-aligned bounding rect (diamond + box face) — used for hit-testing
         self.rect = pygame.Rect(
-            origin_x + col * TILE_SIZE,
-            origin_y + row * TILE_SIZE,
-            TILE_SIZE,
-            TILE_SIZE,
+            self.iso_x - ISO_TILE_W // 2,
+            self.iso_y,
+            ISO_TILE_W,
+            ISO_TILE_H + ISO_TILE_DEPTH,
         )
 
         self.state: str = NORMAL
@@ -93,20 +103,80 @@ class Tile:
 
     def draw(self, surface: pygame.Surface) -> None:
         if self.state == DISAPPEARED:
-            # Draw a dark pit so the gap is visible
-            pygame.draw.rect(surface, TILE_COLOR_VOID, self.rect)
+            # Dark pit — just the top diamond face to show the hole
+            self._draw_top_diamond(surface, TILE_COLOR_VOID)
             return
 
         if self.state == WARNING:
             if not self._flash_visible:
-                # Draw semi-transparent void during "off" flash
-                pygame.draw.rect(surface, TILE_COLOR_VOID, self.rect)
+                self._draw_top_diamond(surface, TILE_COLOR_VOID)
                 return
             color = TILE_COLOR_WARNING
         else:
             color = TILE_COLOR_NORMAL
 
-        # Filled rectangle
-        pygame.draw.rect(surface, color, self.rect)
-        # Border
-        pygame.draw.rect(surface, TILE_COLOR_BORDER, self.rect, 2)
+        self._draw_iso_box(surface, color)
+
+    def _draw_iso_box(self, surface: pygame.Surface, base_color: tuple) -> None:
+        """Draw a 3-D isometric box: top, left, and right faces with shading."""
+        ix, iy = self.iso_x, self.iso_y
+        hw = ISO_TILE_W // 2   # 64
+        hh = ISO_TILE_H // 2   # 32
+        d  = ISO_TILE_DEPTH    # 32
+
+        # Light source: top-left  →  top bright, left mid, right dark
+        top_color   = _shade(base_color, 1.00)
+        left_color  = _shade(base_color, 0.68)
+        right_color = _shade(base_color, 0.48)
+        border_color = _shade(base_color, 0.30)
+
+        # ── Side faces (drawn first, beneath the top face) ────────────────
+        # Left face: W → S → S_bottom → W_bottom
+        left_pts = [
+            (ix - hw, iy + hh),
+            (ix,      iy + ISO_TILE_H),
+            (ix,      iy + ISO_TILE_H + d),
+            (ix - hw, iy + hh + d),
+        ]
+        pygame.draw.polygon(surface, left_color, left_pts)
+
+        # Right face: E → S → S_bottom → E_bottom
+        right_pts = [
+            (ix + hw, iy + hh),
+            (ix,      iy + ISO_TILE_H),
+            (ix,      iy + ISO_TILE_H + d),
+            (ix + hw, iy + hh + d),
+        ]
+        pygame.draw.polygon(surface, right_color, right_pts)
+
+        # ── Top diamond face ──────────────────────────────────────────────
+        top_pts = [
+            (ix,      iy),               # N
+            (ix + hw, iy + hh),          # E
+            (ix,      iy + ISO_TILE_H),  # S
+            (ix - hw, iy + hh),          # W
+        ]
+        pygame.draw.polygon(surface, top_color, top_pts)
+
+        # ── Outline ───────────────────────────────────────────────────────
+        pygame.draw.polygon(surface, border_color, top_pts, 1)
+        pygame.draw.lines(surface, border_color, False, [
+            (ix - hw, iy + hh),
+            (ix - hw, iy + hh + d),
+            (ix,      iy + ISO_TILE_H + d),
+            (ix + hw, iy + hh + d),
+            (ix + hw, iy + hh),
+        ], 1)
+
+    def _draw_top_diamond(self, surface: pygame.Surface, color: tuple) -> None:
+        """Draw only the top diamond face (used for disappeared / void tiles)."""
+        ix, iy = self.iso_x, self.iso_y
+        hw = ISO_TILE_W // 2
+        pts = [
+            (ix,      iy),
+            (ix + hw, iy + ISO_TILE_H // 2),
+            (ix,      iy + ISO_TILE_H),
+            (ix - hw, iy + ISO_TILE_H // 2),
+        ]
+        pygame.draw.polygon(surface, color, pts)
+        pygame.draw.polygon(surface, _shade(color, 0.5), pts, 1)
