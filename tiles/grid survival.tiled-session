@@ -34,6 +34,7 @@
             "scaleInEditor": 1
         },
         "ground.tsx": {
+            "dynamicWrapping": false,
             "scaleInDock": 1,
             "scaleInEditor": 1
         },
@@ -48,7 +49,7 @@
             "scaleInEditor": 1
         }
     },
-    "last.imagePath": "C:/Users/kynm/Downloads/Low_Poly_Pixel_2D_Blocks_Devilsworkshop_v05.1/assets_pixel_50x50",
+    "last.imagePath": "C:/Users/kynm/Desktop/Grid_Survival/Assets/cropped",
     "map.height": 24,
     "map.lastUsedFormat": "tmx",
     "map.layerDataFormat": "1",
@@ -60,12 +61,12 @@
     ],
     "project": "grid survival.tiled-project",
     "recentFiles": [
+        "ground.tsx",
         "tilesfloor.tsx",
         "C:/Users/kynm/Desktop/Grid_Survival/Assets/maps/level_1.tmx",
         "C_OutSide_Nature.tsx",
         "C:/Users/kynm/Desktop/Grid_Survival/Assets/maps/level 1.tmx",
-        "tiles isometric.tsx",
-        "ground.tsx"
+        "tiles isometric.tsx"
     ],
     "tileset.lastUsedFormat": "tsx",
     "tileset.type": 1
