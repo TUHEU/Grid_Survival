@@ -180,10 +180,9 @@ class Player:
         if self.state == ELIMINATED:
             return
 
-        # Draw player as a small isometric diamond sitting on the tile top face.
-        # Raise it slightly above the diamond centre so it reads clearly.
+        # Draw player as a small isometric diamond flush on the tile top face.
         ix = int(self.x)
-        iy = int(self.y) - ISO_TILE_H // 4
+        iy = int(self.y)
         hw = ISO_TILE_W // 4   # diamond half-width  (32 px)
         hh = ISO_TILE_H // 4   # diamond half-height (16 px)
 
