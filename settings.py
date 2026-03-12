@@ -32,10 +32,12 @@ _ISO_GRID_H   = (GRID_COLS + GRID_ROWS) * ISO_TILE_H // 2 + ISO_TILE_DEPTH  # 54
 ISO_GRID_OFFSET_X = (WINDOW_SIZE[0] - _ISO_GRID_W) // 2 + GRID_ROWS * ISO_TILE_W // 2  # 512
 ISO_GRID_OFFSET_Y = (WINDOW_SIZE[1] - _ISO_GRID_H) // 2                                 # 88
 
-# Tile colours (placeholder until pixel-art assets arrive)
-TILE_COLOR_NORMAL  = ( 72, 160,  72)   # green  – walkable
+# Tile colours
+TILE_TOP_COLOR     = ( 93, 187,  69)   # #5DBB45 – top face
+TILE_LEFT_COLOR    = ( 61, 140,  47)   # #3D8C2F – left face
+TILE_RIGHT_COLOR   = ( 42,  97,  33)   # #2A6121 – right face
+TILE_BORDER_COLOR  = ( 25,  55,  20)   # dark border (1 px)
 TILE_COLOR_WARNING = (220, 150,  25)   # amber  – about to fall
-TILE_COLOR_BORDER  = ( 35,  80,  35)   # dark green border
 TILE_COLOR_VOID    = ( 12,  12,  18)   # hole   – disappeared tile bg
 
 # Tile state timing
