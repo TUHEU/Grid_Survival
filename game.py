@@ -185,70 +185,55 @@ class Game:
     # ── Pre-rendered overlays ─────────────────────────────────────────────
 
     def _build_shadow(self) -> pygame.Surface:
-        """Soft elliptical shadow drawn beneath the platform."""
+        """Soft elliptical shadow drawn beneath the platform (numpy)."""
+        import numpy as np
+
         hw = ISO_TILE_W // 2
         hh = ISO_TILE_H // 2
-        # Grid visual centre
-        cx = WINDOW_SIZE[0] // 2
-        # Shadow sits just below the bottom edge of the grid
+
+        # Ellipse radii — wide & shallow, matching the isometric footprint
+        rx = int((GRID_COLS + GRID_ROWS) * hw * 0.55)
+        ry = int((GRID_COLS + GRID_ROWS) * hh * 0.38)
+        w, h = rx * 2, ry * 2
+
+        # Per-pixel elliptical distance → alpha
+        ys = np.linspace(-1, 1, h).reshape(-1, 1)
+        xs = np.linspace(-1, 1, w).reshape(1, -1)
+        dist = np.sqrt(xs ** 2 + ys ** 2)            # 0 at centre, 1 at edge
+        alpha = np.clip(1.0 - dist, 0, 1) ** 1.8     # smooth falloff
+        alpha = (alpha * 50).astype(np.uint8)         # max 50 — subtle
+
+        pixels = np.zeros((h, w, 4), dtype=np.uint8)
+        pixels[:, :, 3] = alpha                       # black with varying alpha
+
+        shadow = pygame.image.frombuffer(pixels.tobytes(), (w, h), "RGBA").convert_alpha()
+
+        # Position: centred horizontally, vertically at grid's visual centre + depth offset
         grid_bottom = (ISO_GRID_OFFSET_Y
                        + ((GRID_COLS - 1) + (GRID_ROWS - 1)) * hh
                        + ISO_TILE_H + ISO_TILE_DEPTH)
+        cx = WINDOW_SIZE[0] // 2
         cy = (ISO_GRID_OFFSET_Y + grid_bottom) // 2 + ISO_TILE_DEPTH
-
-        # Ellipse radii (wider than tall, matching isometric proportions)
-        rx = int((GRID_COLS + GRID_ROWS) * hw * 0.58)
-        ry = int((GRID_COLS + GRID_ROWS) * hh * 0.45)
-        w, h = rx * 2, ry * 2
-
-        # Build at quarter-res then scale up for a natural Gaussian-like blur
-        qw, qh = max(w // 4, 1), max(h // 4, 1)
-        small = pygame.Surface((qw, qh), pygame.SRCALPHA)
-        for i in range(qw // 2):
-            t = 1.0 - i / (qw / 2)
-            alpha = int(70 * (t ** 1.6))
-            pygame.draw.ellipse(
-                small, (0, 0, 0, alpha),
-                (i, int(i * qh / qw), qw - 2 * i, qh - int(2 * i * qh / qw)),
-            )
-        shadow = pygame.transform.smoothscale(small, (w, h))
         self._shadow_rect = shadow.get_rect(center=(cx, cy))
         return shadow
 
     def _build_vignette(self) -> pygame.Surface:
-        """Subtle dark vignette around the screen edges."""
+        """Smooth radial vignette — dark at edges, transparent in centre (numpy)."""
+        import numpy as np
+
         w, h = WINDOW_SIZE
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        cx, cy = w / 2, h / 2
-        max_r = math.hypot(cx, cy)
-        # Draw concentric rectangles from edge inward with decreasing alpha
-        steps = 80
-        for i in range(steps):
-            t = i / steps  # 0 = outermost, 1 = innermost
-            alpha = int(100 * (1.0 - t) ** 2.2)
-            if alpha < 1:
-                break
-            inset_x = int(t * cx * 0.9)
-            inset_y = int(t * cy * 0.9)
-            rect = pygame.Rect(inset_x, inset_y,
-                               w - 2 * inset_x, h - 2 * inset_y)
-            border_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            border_surf.fill((0, 0, 0, 0))
-            # Draw only the border band by filling then cutting the inside out
-            full = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-            full.fill((0, 0, 0, alpha))
-            # Cut inner portion
-            inner_w = max(rect.w - 2 * (w // steps), 0)
-            inner_h = max(rect.h - 2 * (h // steps), 0)
-            if inner_w > 0 and inner_h > 0:
-                inner_rect = pygame.Rect(
-                    (rect.w - inner_w) // 2,
-                    (rect.h - inner_h) // 2,
-                    inner_w, inner_h,
-                )
-                full.fill((0, 0, 0, 0), inner_rect)
-            surf.blit(full, rect.topleft)
-        return surf
+        ys = np.linspace(-1, 1, h).reshape(-1, 1)
+        xs = np.linspace(-1, 1, w).reshape(1, -1)
+        # Elliptical distance normalised so corners = 1
+        dist = np.sqrt(xs ** 2 + ys ** 2) / math.sqrt(2)
+        # Start darkening beyond 40 % from centre, ramp up toward edges
+        alpha = np.clip((dist - 0.4) / 0.6, 0, 1) ** 1.8
+        alpha = (alpha * 120).astype(np.uint8)        # max 120 at corners
+
+        pixels = np.zeros((h, w, 4), dtype=np.uint8)
+        pixels[:, :, 3] = alpha
+
+        return pygame.image.frombuffer(pixels.tobytes(), (w, h), "RGBA").convert_alpha()
 
     # ── Restart ───────────────────────────────────────────────────────────
 
