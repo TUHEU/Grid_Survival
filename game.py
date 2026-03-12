@@ -3,9 +3,13 @@ import math
 import pygame
 
 from assets import load_background_surface
-from player import ELIMINATED, Player
+from hazards import HazardManager
+from player import ELIMINATED, KEYS_ARROWS, KEYS_WASD, Player
 from settings import (
     BACKGROUND_COLOR,
+    DIFFICULTY_INTERVAL,
+    DIFFICULTY_MIN_INTERVAL,
+    DIFFICULTY_SPEED_FACTOR,
     GRID_COLS,
     GRID_ROWS,
     ISO_GRID_OFFSET_X,
@@ -13,7 +17,10 @@ from settings import (
     ISO_TILE_DEPTH,
     ISO_TILE_H,
     ISO_TILE_W,
+    PLAYER_COLOR,
+    PLAYER_COLOR_2,
     TARGET_FPS,
+    TILES_PER_SECOND,
     WINDOW_SIZE,
     WINDOW_TITLE,
 )
@@ -43,8 +50,18 @@ class Game:
         self._bake_vignette_into_background()
 
         # ── Game objects ──────────────────────────────────────────────────
-        self.grid   = TileGrid()
-        self.player = Player(start_col=4, start_row=2)
+        self.grid    = TileGrid()
+        self.players = [
+            Player(start_col=3, start_row=2, keys=KEYS_ARROWS,
+                   color=PLAYER_COLOR, player_id=1),
+            Player(start_col=6, start_row=3, keys=KEYS_WASD,
+                   color=PLAYER_COLOR_2, player_id=2),
+        ]
+        self.hazards = HazardManager(self.grid)
+
+        # ── Difficulty ────────────────────────────────────────────────────
+        self._difficulty_timer: float = 0.0
+        self._current_spawn_interval: float = 1.0 / TILES_PER_SECOND
 
         # ── HUD font ──────────────────────────────────────────────────────
         self.font      = pygame.font.SysFont("consolas", _HUD_FONT_SIZE, bold=True)
@@ -70,7 +87,8 @@ class Game:
             return
 
         if not self._game_over:
-            self.player.handle_input(keys, self.grid)
+            for player in self.players:
+                player.handle_input(keys, self.grid)
 
     # ── Update ────────────────────────────────────────────────────────────
 
@@ -79,9 +97,21 @@ class Game:
             return
 
         self.grid.update(dt)
-        self.player.update(dt, self.grid)
+        for player in self.players:
+            player.update(dt, self.grid)
+        self.hazards.update(dt, self.players)
 
-        if self.player.state == ELIMINATED:
+        # Difficulty scaling
+        self._difficulty_timer += dt
+        if self._difficulty_timer >= DIFFICULTY_INTERVAL:
+            self._difficulty_timer -= DIFFICULTY_INTERVAL
+            self._current_spawn_interval = max(
+                DIFFICULTY_MIN_INTERVAL,
+                self._current_spawn_interval * DIFFICULTY_SPEED_FACTOR,
+            )
+            self.grid.set_spawn_interval(self._current_spawn_interval)
+
+        if all(p.state == ELIMINATED for p in self.players):
             self._game_over = True
 
     # ── Draw ──────────────────────────────────────────────────────────────
@@ -95,6 +125,7 @@ class Game:
         self.screen.blit(self._shadow_surface, self._shadow_rect)
 
         self._draw_scene()
+        self.hazards.draw(self.screen)
 
         self._draw_hud()
 
@@ -104,30 +135,30 @@ class Game:
         pygame.display.flip()
 
     def _draw_scene(self):
-        """Draw tiles and player interleaved in back-to-front isometric order."""
-        # Collect and sort all tiles by depth (row + col ascending)
+        """Draw tiles and players interleaved in back-to-front isometric order."""
         all_tiles = sorted(
             (tile for row in self.grid.tiles for tile in row),
             key=lambda t: t.col + t.row,
         )
 
-        player_depth = self.player.col + self.player.row
-        player_drawn = False
-
+        # Build list of (depth, drawable) for players too
+        drawables: list[tuple[int, object]] = []
         for tile in all_tiles:
-            # Draw player once we pass its depth layer
-            if not player_drawn and tile.col + tile.row > player_depth:
-                self.player.draw(self.screen)
-                player_drawn = True
-            tile.draw(self.screen)
+            drawables.append((tile.col + tile.row, tile))
+        for player in self.players:
+            if player.state != ELIMINATED:
+                drawables.append((player.col + player.row, player))
 
-        # Player at maximum depth (or eliminated) — draw last
-        if not player_drawn:
-            self.player.draw(self.screen)
+        # Stable sort: tiles before players at the same depth
+        drawables.sort(key=lambda d: d[0])
+
+        for _, obj in drawables:
+            obj.draw(self.screen)
 
     def _draw_hud(self):
-        # Survival timer (top-left)
-        t = int(self.player.alive_time)
+        # Best survival timer (top-left) — longest alive among all players
+        best_time = max(p.alive_time for p in self.players)
+        t = int(best_time)
         minutes, seconds = divmod(t, 60)
         timer_text = self.font.render(
             f"TIME  {minutes:02d}:{seconds:02d}", True, _HUD_COLOR
@@ -140,6 +171,23 @@ class Game:
             f"TILES  {remaining:02d}", True, _HUD_COLOR
         )
         self.screen.blit(tiles_text, (WINDOW_SIZE[0] - tiles_text.get_width() - 20, 16))
+
+        # Per-player status (bottom)
+        for i, player in enumerate(self.players):
+            label = f"P{player.player_id}"
+            if player.state == ELIMINATED:
+                pt = int(player.alive_time)
+                pm, ps = divmod(pt, 60)
+                text = f"{label}  ELIMINATED  {pm:02d}:{ps:02d}"
+                color = (180, 60, 60)
+            else:
+                pt = int(player.alive_time)
+                pm, ps = divmod(pt, 60)
+                text = f"{label}  {pm:02d}:{ps:02d}"
+                color = player.color
+            surf = self.font.render(text, True, color)
+            x = 20 + i * (WINDOW_SIZE[0] // 2)
+            self.screen.blit(surf, (x, WINDOW_SIZE[1] - 40))
 
     def _draw_game_over(self):
         # Translucent overlay
@@ -157,8 +205,9 @@ class Game:
             ),
         )
 
-        # Survived time
-        t = int(self.player.alive_time)
+        # Survived time — show best
+        best_time = max(p.alive_time for p in self.players)
+        t = int(best_time)
         minutes, seconds = divmod(t, 60)
         survived_surf = self.font.render(
             f"Survived  {minutes:02d}:{seconds:02d}", True, _HUD_COLOR
@@ -244,7 +293,12 @@ class Game:
 
     def _restart(self):
         self.grid.reset()
-        self.player.reset(start_col=4, start_row=2)
+        self.players[0].reset(start_col=3, start_row=2)
+        self.players[1].reset(start_col=6, start_row=3)
+        self.hazards.reset()
+        self._difficulty_timer = 0.0
+        self._current_spawn_interval = 1.0 / TILES_PER_SECOND
+        self.grid.set_spawn_interval(self._current_spawn_interval)
         self._game_over = False
 
     # ── Main loop ─────────────────────────────────────────────────────────
