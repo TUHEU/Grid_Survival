@@ -1,6 +1,7 @@
 import pygame
 
 from assets import load_background_surface, load_tilemap_surface
+from player import Player
 from settings import BACKGROUND_COLOR, TARGET_FPS, WINDOW_SIZE, WINDOW_TITLE
 
 
@@ -16,6 +17,7 @@ class Game:
 
         self.background_surface = load_background_surface(WINDOW_SIZE)
         self.map_surface, self.tmx_data = load_tilemap_surface(WINDOW_SIZE)
+        self.player = Player()
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -28,7 +30,7 @@ class Game:
 
     def update(self, dt: float):
         """Advance game state. Placeholder for future logic."""
-        _ = dt  # suppress unused variable warnings for now
+        self.player.update(dt)
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -36,6 +38,7 @@ class Game:
             self.screen.blit(self.background_surface, (0, 0))
         if self.map_surface:
             self.screen.blit(self.map_surface, (0, 0))
+        self.player.draw(self.screen)
         pygame.display.flip()
 
     def run(self):
