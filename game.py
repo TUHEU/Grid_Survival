@@ -24,13 +24,12 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
 
-        keys = pygame.key.get_pressed()
+    def update(self, dt: float, keys):
         if keys[pygame.K_ESCAPE]:
             self.running = False
+            return
 
-    def update(self, dt: float):
-        """Advance game state. Placeholder for future logic."""
-        self.player.update(dt)
+        self.player.update(dt, keys)
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -45,7 +44,8 @@ class Game:
         while self.running:
             dt = self.clock.tick(TARGET_FPS) / 1000.0
             self.handle_events()
-            self.update(dt)
+            keys = pygame.key.get_pressed()
+            self.update(dt, keys)
             self.draw()
 
         pygame.quit()

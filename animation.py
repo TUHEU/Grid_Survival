@@ -64,6 +64,10 @@ class SpriteAnimation:
                     self.current_index = len(self.frames) - 1
                     break
 
+    def reset(self):
+        self.current_index = 0
+        self.time_accumulator = 0.0
+
     @property
     def image(self):
         return self.frames[self.current_index]
