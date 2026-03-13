@@ -5,9 +5,12 @@ from settings import (
     PLAYER_ANIMATION_PATHS,
     PLAYER_DEFAULT_DIRECTION,
     PLAYER_FRAME_DURATION,
+    PLAYER_FALL_GRAVITY,
+    PLAYER_FALL_MAX_SPEED,
     PLAYER_SCALE,
     PLAYER_SPEED,
     PLAYER_START_POS,
+    WINDOW_SIZE,
 )
 
 
@@ -25,6 +28,8 @@ class Player:
         self.rect = self.current_animation.image.get_rect(center=position)
         self._feet_mask = None
         self._feet_mask_count = 0
+        self.falling = False
+        self.fall_velocity = 0.0
 
     def _load_animations(self):
         animations = {}
@@ -70,6 +75,12 @@ class Player:
         return self.facing
 
     def update(self, dt: float, keys, walkable_mask):
+        if self.falling:
+            self._update_fall(dt)
+            self.current_animation.update(dt)
+            self.rect.center = (round(self.position.x), round(self.position.y))
+            return
+
         move_vector = self._input_vector(keys)
         desired_facing = (
             self._determine_facing(move_vector)
@@ -77,36 +88,47 @@ class Player:
             else self.facing
         )
 
+        left_playable = False
         if move_vector.length_squared() > 0:
             move_vector = move_vector.normalize()
             displacement = move_vector * self.speed * dt
             self.velocity = move_vector * self.speed
-            self._attempt_move(displacement, walkable_mask)
+            left_playable = not self._attempt_move(displacement, walkable_mask)
             self._set_state("run", desired_facing)
         else:
             self.velocity.update(0, 0)
             self._set_state("idle", desired_facing)
+            if walkable_mask and not self._is_over_platform(self.position, walkable_mask):
+                left_playable = True
+
+        if left_playable:
+            self._start_fall()
+            self._update_fall(dt)
 
         self.current_animation.update(dt)
         self.rect.center = (round(self.position.x), round(self.position.y))
 
-    def _attempt_move(self, delta: pygame.Vector2, walkable_mask):
+    def _attempt_move(self, delta: pygame.Vector2, walkable_mask) -> bool:
         proposed = self.position + delta
         if self._is_over_platform(proposed, walkable_mask):
             self.position = proposed
-            return
+            return True
 
         # try separating axes so the player can slide along platform edges
         if delta.x:
             proposed_x = pygame.Vector2(self.position.x + delta.x, self.position.y)
             if self._is_over_platform(proposed_x, walkable_mask):
                 self.position.x = proposed_x.x
-                return
+                return True
 
         if delta.y:
             proposed_y = pygame.Vector2(self.position.x, self.position.y + delta.y)
             if self._is_over_platform(proposed_y, walkable_mask):
                 self.position.y = proposed_y.y
+                return True
+
+        self.position = proposed
+        return False
 
     def _is_over_platform(self, position: pygame.Vector2, walkable_mask) -> bool:
         if walkable_mask is None:
@@ -139,3 +161,21 @@ class Player:
             self._feet_mask.fill()
             self._feet_mask_count = self._feet_mask.count()
         return self._feet_mask
+
+    def _start_fall(self):
+        if self.falling:
+            return
+        self.falling = True
+        self.fall_velocity = 0.0
+        self.velocity.update(0, 0)
+
+    def _update_fall(self, dt: float):
+        self.fall_velocity = min(
+            self.fall_velocity + PLAYER_FALL_GRAVITY * dt, PLAYER_FALL_MAX_SPEED
+        )
+        self.position.y += self.fall_velocity * dt
+        self.velocity.y = self.fall_velocity
+
+        bottom_limit = WINDOW_SIZE[1] + self.rect.height
+        if self.position.y - self.rect.height / 2 > WINDOW_SIZE[1]:
+            self.position.y = min(self.position.y, bottom_limit)
