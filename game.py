@@ -23,9 +23,12 @@ class Game:
         self.running = True
 
         self.background_surface = load_background_surface(WINDOW_SIZE)
-        self.map_surface, self.tmx_data, self.colliders = load_tilemap_surface(
-            WINDOW_SIZE
-        )
+        (
+            self.map_surface,
+            self.tmx_data,
+            self.walkable_mask,
+        ) = load_tilemap_surface(WINDOW_SIZE)
+        self.walkable_debug_surface = None
         self.player = Player()
 
     def handle_events(self):
@@ -38,7 +41,7 @@ class Game:
             self.running = False
             return
 
-        self.player.update(dt, keys, self.colliders)
+        self.player.update(dt, keys, self.walkable_mask)
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -51,11 +54,16 @@ class Game:
         pygame.display.flip()
 
     def _draw_walkable_debug(self):
-        if not DEBUG_DRAW_WALKABLE or not self.colliders:
+        if not DEBUG_DRAW_WALKABLE or self.walkable_mask is None:
             return
 
-        for rect in self.colliders:
-            pygame.draw.rect(self.screen, DEBUG_WALKABLE_COLOR, rect, 1)
+        if self.walkable_debug_surface is None:
+            color = (*DEBUG_WALKABLE_COLOR, 90)
+            self.walkable_debug_surface = self.walkable_mask.to_surface(
+                setcolor=color, unsetcolor=(0, 0, 0, 0)
+            )
+
+        self.screen.blit(self.walkable_debug_surface, (0, 0))
 
     def run(self):
         while self.running:

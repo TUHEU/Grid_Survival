@@ -60,14 +60,9 @@ def _render_tmx_to_surface(tmx_data) -> pygame.Surface:
     return surface
 
 
-def _build_colliders(
-    tmx_data,
-    layer_names=None,
-    object_class_names=None,
-    scale_x=1.0,
-    scale_y=1.0,
-):
-    colliders = []
+def _render_walkable_surface(tmx_data, layer_names, object_class_names):
+    map_width, map_height = _calculate_surface_size(tmx_data)
+    surface = pygame.Surface((map_width, map_height), pygame.SRCALPHA)
     target_layers = {name.lower() for name in (layer_names or []) if name}
     target_classes = {name.lower() for name in (object_class_names or []) if name}
 
@@ -78,17 +73,16 @@ def _build_colliders(
             if not hasattr(layer, "tiles"):
                 continue
 
-            for x, y, _ in layer.tiles():
-                px, py = _tile_to_pixel(x, y, layer, tmx_data)
-                rect = pygame.Rect(
-                    int(round(px * scale_x)),
-                    int(round(py * scale_y)),
-                    int(math.ceil(tmx_data.tilewidth * scale_x)),
-                    int(math.ceil(tmx_data.tileheight * scale_y)),
-                )
-                colliders.append(rect)
+            for x, y, image in layer.tiles():
+                pos = _tile_to_pixel(x, y, layer, tmx_data)
+                if image:
+                    surface.blit(image, pos)
+                else:
+                    rect = pygame.Rect(pos, (tmx_data.tilewidth, tmx_data.tileheight))
+                    pygame.draw.rect(surface, (255, 255, 255, 255), rect)
 
     if target_classes:
+        fill_color = (255, 255, 255, 255)
         for layer in tmx_data.layers:
             if not hasattr(layer, "objects"):
                 continue
@@ -106,22 +100,20 @@ def _build_colliders(
 
                 width = getattr(obj, "width", 0)
                 height = getattr(obj, "height", 0)
-                rect = pygame.Rect(
-                    int(round((obj.x + layer_offset_x) * scale_x)),
-                    int(round((obj.y + layer_offset_y) * scale_y)),
-                    int(math.ceil(width * scale_x)),
-                    int(math.ceil(height * scale_y)),
-                )
-                colliders.append(rect)
 
-    return colliders
+                rect = pygame.Rect(
+                    obj.x + layer_offset_x,
+                    obj.y + layer_offset_y,
+                    width,
+                    height,
+                )
+                pygame.draw.rect(surface, fill_color, rect)
+
+    return surface
 
 
 def load_tilemap_surface(window_size):
-    """Load the TMX tilemap, scale it, and build collider rects.
-
-    Returns a tuple of (scaled_surface, tmx_data, colliders).
-    """
+    """Load the TMX tilemap, scale it, and build the walkable mask."""
     if load_pygame is None:
         print("Install pytmx (pip install pytmx) to render Tiled maps.")
         return None, None, []
@@ -139,14 +131,18 @@ def load_tilemap_surface(window_size):
         scale_y = window_size[1] / raw_surface.get_height()
 
     scaled_surface = pygame.transform.smoothscale(raw_surface, window_size)
-    colliders = _build_colliders(
-        tmx_data,
-        WALKABLE_LAYER_NAMES,
-        WALKABLE_OBJECT_CLASS_NAMES,
-        scale_x,
-        scale_y,
+
+    walkable_surface_raw = _render_walkable_surface(
+        tmx_data, WALKABLE_LAYER_NAMES, WALKABLE_OBJECT_CLASS_NAMES
     )
-    return scaled_surface, tmx_data, colliders
+    walkable_surface = pygame.transform.smoothscale(walkable_surface_raw, window_size)
+    walkable_mask = (
+        pygame.mask.from_surface(walkable_surface)
+        if walkable_surface.get_width() and walkable_surface.get_height()
+        else None
+    )
+
+    return scaled_surface, tmx_data, walkable_mask
 
 
 def load_background_surface(window_size):

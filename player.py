@@ -23,6 +23,8 @@ class Player:
         self.animations = self._load_animations()
         self.current_animation = self.animations[self.state][self.facing]
         self.rect = self.current_animation.image.get_rect(center=position)
+        self._feet_mask = None
+        self._feet_mask_count = 0
 
     def _load_animations(self):
         animations = {}
@@ -67,7 +69,7 @@ class Player:
             return "right"
         return self.facing
 
-    def update(self, dt: float, keys, colliders):
+    def update(self, dt: float, keys, walkable_mask):
         move_vector = self._input_vector(keys)
         desired_facing = (
             self._determine_facing(move_vector)
@@ -79,7 +81,7 @@ class Player:
             move_vector = move_vector.normalize()
             displacement = move_vector * self.speed * dt
             self.velocity = move_vector * self.speed
-            self._attempt_move(displacement, colliders)
+            self._attempt_move(displacement, walkable_mask)
             self._set_state("run", desired_facing)
         else:
             self.velocity.update(0, 0)
@@ -88,30 +90,32 @@ class Player:
         self.current_animation.update(dt)
         self.rect.center = (round(self.position.x), round(self.position.y))
 
-    def _attempt_move(self, delta: pygame.Vector2, colliders):
+    def _attempt_move(self, delta: pygame.Vector2, walkable_mask):
         proposed = self.position + delta
-        if self._is_over_platform(proposed, colliders):
+        if self._is_over_platform(proposed, walkable_mask):
             self.position = proposed
             return
 
         # try separating axes so the player can slide along platform edges
         if delta.x:
             proposed_x = pygame.Vector2(self.position.x + delta.x, self.position.y)
-            if self._is_over_platform(proposed_x, colliders):
+            if self._is_over_platform(proposed_x, walkable_mask):
                 self.position.x = proposed_x.x
                 return
 
         if delta.y:
             proposed_y = pygame.Vector2(self.position.x, self.position.y + delta.y)
-            if self._is_over_platform(proposed_y, colliders):
+            if self._is_over_platform(proposed_y, walkable_mask):
                 self.position.y = proposed_y.y
 
-    def _is_over_platform(self, position: pygame.Vector2, colliders) -> bool:
-        if not colliders:
+    def _is_over_platform(self, position: pygame.Vector2, walkable_mask) -> bool:
+        if walkable_mask is None:
             return True
 
         feet_rect = self._feet_rect(position)
-        return any(feet_rect.colliderect(collider) for collider in colliders)
+        feet_mask = self._feet_mask_for_rect(feet_rect)
+        overlap = walkable_mask.overlap_area(feet_mask, feet_rect.topleft)
+        return overlap == self._feet_mask_count
 
     def _feet_rect(self, position: pygame.Vector2) -> pygame.Rect:
         width = max(4, int(self.rect.width * 0.2))
@@ -127,3 +131,11 @@ class Player:
         surface.blit(self.current_animation.image, self.rect.topleft)
         feet_rect = self._feet_rect(self.position)
         pygame.draw.rect(surface, (255, 230, 0), feet_rect, 1)
+
+    def _feet_mask_for_rect(self, rect: pygame.Rect) -> pygame.mask.Mask:
+        size = rect.size
+        if self._feet_mask is None or self._feet_mask.get_size() != size:
+            self._feet_mask = pygame.mask.Mask(size)
+            self._feet_mask.fill()
+            self._feet_mask_count = self._feet_mask.count()
+        return self._feet_mask
