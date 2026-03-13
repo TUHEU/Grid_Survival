@@ -21,11 +21,11 @@
             "scaleInDock": 0.75
         },
         "C:/Users/kynm/Desktop/Grid_Survival/Assets/maps/level_1.tmx": {
-            "scale": 1,
-            "selectedLayer": 0,
+            "scale": 0.75,
+            "selectedLayer": 1,
             "viewCenter": {
-                "x": 734.5,
-                "y": 474.5
+                "x": 715.3333333333333,
+                "y": 367.33333333333326
             }
         },
         "C_OutSide_Nature.tsx": {
@@ -57,8 +57,8 @@
     "map.tileWidth": 64,
     "map.width": 24,
     "openFiles": [
-        "C:/Users/kynm/Desktop/Grid_Survival/Assets/maps/level_1.tmx",
-        "tilesfloor.tsx"
+        "tilesfloor.tsx",
+        "C:/Users/kynm/Desktop/Grid_Survival/Assets/maps/level_1.tmx"
     ],
     "project": "grid survival.tiled-project",
     "recentFiles": [

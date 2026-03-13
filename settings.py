@@ -16,8 +16,9 @@ TARGET_FPS = 60
 PLAYER_FRAME_DURATION = 1 / 24  # seconds per frame
 PLAYER_SCALE = .2  # set to tuple like (48, 64) if you prefer explicit sizing
 PLAYER_START_POS = (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2)
-PLAYER_SPEED = 100  # pixels per second
+PLAYER_SPEED = 200  # pixels per second
 PLAYER_DEFAULT_DIRECTION = "down"
+
 
 PLAYER_ANIMATION_PATHS = {
 	"idle": {
@@ -33,3 +34,9 @@ PLAYER_ANIMATION_PATHS = {
 		"right": CHARACTER_BASE / "running" / "Right - Running",
 	},
 }
+
+WALKABLE_LAYER_NAMES = ["Top"]  # tile layers whose cells are considered walkable
+WALKABLE_OBJECT_CLASS_NAMES = ["Platform"]  # Tiled object classes (rect/polygon) that define walkable regions
+
+DEBUG_DRAW_WALKABLE = True
+DEBUG_WALKABLE_COLOR = (30, 144, 255)

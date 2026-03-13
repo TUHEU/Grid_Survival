@@ -19,6 +19,7 @@ class Player:
         self.speed = PLAYER_SPEED
         self.state = "idle"
         self.facing = PLAYER_DEFAULT_DIRECTION
+        self.velocity = pygame.Vector2(0, 0)
         self.animations = self._load_animations()
         self.current_animation = self.animations[self.state][self.facing]
         self.rect = self.current_animation.image.get_rect(center=position)
@@ -66,21 +67,63 @@ class Player:
             return "right"
         return self.facing
 
-    def update(self, dt: float, keys):
+    def update(self, dt: float, keys, colliders):
         move_vector = self._input_vector(keys)
+        desired_facing = (
+            self._determine_facing(move_vector)
+            if move_vector.length_squared() > 0
+            else self.facing
+        )
 
         if move_vector.length_squared() > 0:
-            facing = self._determine_facing(move_vector)
-            move_vector = move_vector.normalize() * self.speed * dt
-            self.position += move_vector
-            self._set_state("run", facing)
+            move_vector = move_vector.normalize()
+            displacement = move_vector * self.speed * dt
+            self.velocity = move_vector * self.speed
+            self._attempt_move(displacement, colliders)
+            self._set_state("run", desired_facing)
         else:
-            self._set_state("idle", self.facing)
+            self.velocity.update(0, 0)
+            self._set_state("idle", desired_facing)
 
         self.current_animation.update(dt)
-        self.rect = self.current_animation.image.get_rect(
-            center=(round(self.position.x), round(self.position.y))
+        self.rect.center = (round(self.position.x), round(self.position.y))
+
+    def _attempt_move(self, delta: pygame.Vector2, colliders):
+        proposed = self.position + delta
+        if self._is_over_platform(proposed, colliders):
+            self.position = proposed
+            return
+
+        # try separating axes so the player can slide along platform edges
+        if delta.x:
+            proposed_x = pygame.Vector2(self.position.x + delta.x, self.position.y)
+            if self._is_over_platform(proposed_x, colliders):
+                self.position.x = proposed_x.x
+                return
+
+        if delta.y:
+            proposed_y = pygame.Vector2(self.position.x, self.position.y + delta.y)
+            if self._is_over_platform(proposed_y, colliders):
+                self.position.y = proposed_y.y
+
+    def _is_over_platform(self, position: pygame.Vector2, colliders) -> bool:
+        if not colliders:
+            return True
+
+        feet_rect = self._feet_rect(position)
+        return any(feet_rect.colliderect(collider) for collider in colliders)
+
+    def _feet_rect(self, position: pygame.Vector2) -> pygame.Rect:
+        width = max(4, int(self.rect.width * 0.45))
+        height = max(4, int(self.rect.height * 0.3))
+        rect = pygame.Rect(0, 0, width, height)
+        rect.center = (
+            round(position.x),
+            round(position.y + self.rect.height * 0.15),
         )
+        return rect
 
     def draw(self, surface: pygame.Surface):
         surface.blit(self.current_animation.image, self.rect.topleft)
+        feet_rect = self._feet_rect(self.position)
+        pygame.draw.rect(surface, (255, 230, 0), feet_rect, 1)
