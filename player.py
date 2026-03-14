@@ -10,6 +10,7 @@ from settings import (
     PLAYER_FRAME_DURATION,
     PLAYER_FALL_GRAVITY,
     PLAYER_FALL_MAX_SPEED,
+    PLAYER_SINK_SPEED,
     PLAYER_SCALE,
     PLAYER_SPEED,
     PLAYER_START_POS,
@@ -34,8 +35,9 @@ class Player:
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
-        self.floating = False
-        self.float_surface_y = None
+        self.drowning = False
+        self.drown_animation_done = False
+        self.drown_surface_y = None
 
     def _load_animations(self):
         animations = {}
@@ -43,8 +45,11 @@ class Player:
             animations[state] = {}
             for direction, path in dirs.items():
                 frames = load_frames_from_directory(path, scale=PLAYER_SCALE)
+                loop = state != "death"
                 animations[state][direction] = SpriteAnimation(
-                    frames, frame_duration=PLAYER_FRAME_DURATION
+                    frames,
+                    frame_duration=PLAYER_FRAME_DURATION,
+                    loop=loop,
                 )
         return animations
 
@@ -87,9 +92,8 @@ class Player:
             self.rect.center = (round(self.position.x), round(self.position.y))
             return
 
-        if self.floating:
-            self._update_float(dt, keys)
-            self.current_animation.update(dt)
+        if self.drowning:
+            self._update_drown(dt)
             self.rect.center = (round(self.position.x), round(self.position.y))
             return
 
@@ -178,8 +182,9 @@ class Player:
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
-        self.floating = False
-        self.float_surface_y = None
+        self.drowning = False
+        self.drown_animation_done = False
+        self.drown_surface_y = None
 
     def _feet_mask_for_rect(self, rect: pygame.Rect) -> pygame.mask.Mask:
         size = rect.size
@@ -195,8 +200,9 @@ class Player:
         self.falling = True
         self.fall_velocity = 0.0
         self.velocity.update(0, 0)
-        self.floating = False
-        self.float_surface_y = None
+        self.drowning = False
+        self.drown_animation_done = False
+        self.drown_surface_y = None
         if walkable_bounds:
             feet_rect = self._feet_rect(self.position)
             if walkable_bounds.contains(feet_rect):
@@ -218,7 +224,7 @@ class Player:
             self.position.y = min(self.position.y, bottom_limit)
 
     def draws_behind_map(self) -> bool:
-        return (self.falling or self.floating) and self.fall_draw_behind
+        return (self.falling or self.drowning) and self.fall_draw_behind
 
     def get_feet_rect(self) -> pygame.Rect:
         return self._feet_rect(self.position)
@@ -226,31 +232,32 @@ class Player:
     def is_falling(self) -> bool:
         return self.falling
 
-    def is_floating(self) -> bool:
-        return self.floating
+    def is_drowning(self) -> bool:
+        return self.drowning
 
-    def start_floating(self, surface_y: float, draw_behind: bool | None = None):
+    def start_drowning(self, surface_y: float, draw_behind: bool | None = None):
+        if self.drowning:
+            return
         self.falling = False
         self.fall_velocity = 0.0
         self.velocity.update(0, 0)
-        self.floating = True
-        self.float_surface_y = surface_y
+        self.drowning = True
+        self.drown_animation_done = False
+        self.drown_surface_y = surface_y
         self.position.y = surface_y - self.rect.height * 0.25
+        self._set_state("death", self.facing)
         if draw_behind is not None:
             self.fall_draw_behind = draw_behind
 
-    def _update_float(self, dt: float, keys):
-        move_vector = self._input_vector(keys)
-        horizontal = move_vector.x
-        if horizontal != 0:
-            facing = self._determine_facing(pygame.Vector2(horizontal, 0))
-            self._set_state("run", facing)
-        else:
-            self._set_state("idle", self.facing)
+    def _update_drown(self, dt: float):
+        if not self.drowning:
+            return
+        if not self.drown_animation_done:
+            self.current_animation.update(dt)
+            if self.current_animation.finished:
+                self.drown_animation_done = True
+            return
 
-        self.velocity.x = horizontal * self.speed
-        self.position.x += self.velocity.x * dt
-        if self.float_surface_y is not None:
-            self.position.y = self.float_surface_y - self.rect.height * 0.25
-        half_width = self.rect.width / 2
-        self.position.x = max(half_width, min(WINDOW_SIZE[0] - half_width, self.position.x))
+        # After the death animation holds, sink slowly beneath the water surface.
+        self.position.y += PLAYER_SINK_SPEED * dt
+        self.velocity.y = PLAYER_SINK_SPEED

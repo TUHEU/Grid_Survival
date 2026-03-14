@@ -78,7 +78,7 @@ class Game:
     def _check_water_contact(self):
         if not self.water.has_surface():
             return
-        if self.player.is_floating():
+        if self.player.is_drowning():
             return
         if not self.player.is_falling():
             return
@@ -87,7 +87,7 @@ class Game:
         if feet_rect.bottom < self.water.surface_top():
             return
 
-        self.player.start_floating(self.water.surface_top(), self.player.fall_draw_behind)
+        self.player.start_drowning(self.water.surface_top(), self.player.fall_draw_behind)
         self.water.trigger_splash(self.player.rect.centerx)
 
     def _draw_walkable_debug(self):
