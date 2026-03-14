@@ -52,6 +52,7 @@ class Game:
 
         self.water.update(dt)
         self.player.update(dt, keys, self.walkable_mask, self.walkable_bounds)
+        self._check_water_contact()
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -73,6 +74,21 @@ class Game:
             self.player.draw(self.screen)
 
         pygame.display.flip()
+
+    def _check_water_contact(self):
+        if not self.water.has_surface():
+            return
+        if self.player.is_floating():
+            return
+        if not self.player.is_falling():
+            return
+
+        feet_rect = self.player.get_feet_rect()
+        if feet_rect.bottom < self.water.surface_top():
+            return
+
+        self.player.start_floating(self.water.surface_top(), self.player.fall_draw_behind)
+        self.water.trigger_splash(self.player.rect.centerx)
 
     def _draw_walkable_debug(self):
         if not (DEBUG_VISUALS_ENABLED and DEBUG_DRAW_WALKABLE) or self.walkable_mask is None:

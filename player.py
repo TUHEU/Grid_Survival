@@ -34,6 +34,8 @@ class Player:
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
+        self.floating = False
+        self.float_surface_y = None
 
     def _load_animations(self):
         animations = {}
@@ -81,6 +83,12 @@ class Player:
     def update(self, dt: float, keys, walkable_mask, walkable_bounds):
         if self.falling:
             self._update_fall(dt)
+            self.current_animation.update(dt)
+            self.rect.center = (round(self.position.x), round(self.position.y))
+            return
+
+        if self.floating:
+            self._update_float(dt, keys)
             self.current_animation.update(dt)
             self.rect.center = (round(self.position.x), round(self.position.y))
             return
@@ -170,6 +178,8 @@ class Player:
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
+        self.floating = False
+        self.float_surface_y = None
 
     def _feet_mask_for_rect(self, rect: pygame.Rect) -> pygame.mask.Mask:
         size = rect.size
@@ -185,8 +195,14 @@ class Player:
         self.falling = True
         self.fall_velocity = 0.0
         self.velocity.update(0, 0)
+        self.floating = False
+        self.float_surface_y = None
         if walkable_bounds:
-            self.fall_draw_behind = self.position.y <= walkable_bounds.centery
+            feet_rect = self._feet_rect(self.position)
+            if walkable_bounds.contains(feet_rect):
+                self.fall_draw_behind = True
+            else:
+                self.fall_draw_behind = self.position.y <= walkable_bounds.centery
         else:
             self.fall_draw_behind = False
 
@@ -202,4 +218,39 @@ class Player:
             self.position.y = min(self.position.y, bottom_limit)
 
     def draws_behind_map(self) -> bool:
-        return self.falling and self.fall_draw_behind
+        return (self.falling or self.floating) and self.fall_draw_behind
+
+    def get_feet_rect(self) -> pygame.Rect:
+        return self._feet_rect(self.position)
+
+    def is_falling(self) -> bool:
+        return self.falling
+
+    def is_floating(self) -> bool:
+        return self.floating
+
+    def start_floating(self, surface_y: float, draw_behind: bool | None = None):
+        self.falling = False
+        self.fall_velocity = 0.0
+        self.velocity.update(0, 0)
+        self.floating = True
+        self.float_surface_y = surface_y
+        self.position.y = surface_y - self.rect.height * 0.25
+        if draw_behind is not None:
+            self.fall_draw_behind = draw_behind
+
+    def _update_float(self, dt: float, keys):
+        move_vector = self._input_vector(keys)
+        horizontal = move_vector.x
+        if horizontal != 0:
+            facing = self._determine_facing(pygame.Vector2(horizontal, 0))
+            self._set_state("run", facing)
+        else:
+            self._set_state("idle", self.facing)
+
+        self.velocity.x = horizontal * self.speed
+        self.position.x += self.velocity.x * dt
+        if self.float_surface_y is not None:
+            self.position.y = self.float_surface_y - self.rect.height * 0.25
+        half_width = self.rect.width / 2
+        self.position.x = max(half_width, min(WINDOW_SIZE[0] - half_width, self.position.x))

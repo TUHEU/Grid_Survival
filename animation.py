@@ -110,8 +110,11 @@ class SpriteAnimation:
         self.loop = loop
         self.current_index = 0
         self.time_accumulator = 0.0
+        self.finished = False
 
     def update(self, dt: float):
+        if self.finished:
+            return
         self.time_accumulator += dt
         while self.time_accumulator >= self.frame_duration:
             self.time_accumulator -= self.frame_duration
@@ -121,11 +124,13 @@ class SpriteAnimation:
                     self.current_index = 0
                 else:
                     self.current_index = len(self.frames) - 1
+                    self.finished = True
                     break
 
     def reset(self):
         self.current_index = 0
         self.time_accumulator = 0.0
+        self.finished = False
 
     @property
     def image(self):
