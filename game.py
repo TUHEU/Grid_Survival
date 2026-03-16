@@ -9,6 +9,7 @@ from settings import (
     DEBUG_DRAW_WALKABLE,
     DEBUG_VISUALS_ENABLED,
     DEBUG_WALKABLE_COLOR,
+    MODE_VS_COMPUTER,
     TARGET_FPS,
     USE_AI_PLAYER,
     WINDOW_SIZE,
@@ -16,15 +17,18 @@ from settings import (
 )
 
 
-class Game:
+class GameManager:
     """Main game application wrapper."""
 
-    def __init__(self):
-        pygame.init()
-        self.screen = pygame.display.set_mode(WINDOW_SIZE)
+    def __init__(self, screen=None, clock=None, player_name: str = "Player", game_mode: str = MODE_VS_COMPUTER):
+        if screen is None or clock is None:
+            pygame.init()
+        self.screen = screen or pygame.display.set_mode(WINDOW_SIZE)
         pygame.display.set_caption(WINDOW_TITLE)
-        self.clock = pygame.time.Clock()
+        self.clock = clock or pygame.time.Clock()
         self.running = True
+        self.player_name = player_name
+        self.game_mode = game_mode
 
         self.background_surface = load_background_surface(WINDOW_SIZE)
         (
@@ -34,7 +38,9 @@ class Game:
             self.walkable_bounds,
         ) = load_tilemap_surface(WINDOW_SIZE)
         self.walkable_debug_surface = None
-        self.player = AIPlayer() if USE_AI_PLAYER else Player()
+
+        use_ai = USE_AI_PLAYER and self.game_mode == MODE_VS_COMPUTER
+        self.player = AIPlayer() if use_ai else Player()
         self.water = AnimatedWater()
 
     def handle_events(self):
@@ -114,3 +120,7 @@ class Game:
             self.draw()
 
         pygame.quit()
+
+
+# Backward compatibility for older imports.
+Game = GameManager
