@@ -3,6 +3,7 @@ import math
 import pygame
 
 from assets import load_background_surface, load_tilemap_surface
+from audio import AudioManager
 from player import Player
 from water import AnimatedWater
 from settings import (
@@ -36,6 +37,8 @@ class Game:
         self.walkable_debug_surface = None
         self.player = Player()
         self.water = AnimatedWater()
+        self.audio = AudioManager()
+        self.audio.play_music()
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -110,4 +113,6 @@ class Game:
             self.update(dt, keys)
             self.draw()
 
+        if hasattr(self, "audio"):
+            self.audio.stop_music()
         pygame.quit()
