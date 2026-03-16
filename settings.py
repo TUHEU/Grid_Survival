@@ -1,4 +1,5 @@
 from pathlib import Path
+import pygame
 
 BASE_DIR = Path(__file__).parent
 ASSETS_DIR = BASE_DIR / "Assets"
@@ -21,6 +22,12 @@ PLAYER_DEFAULT_DIRECTION = "down"
 PLAYER_FALL_GRAVITY = 800
 PLAYER_FALL_MAX_SPEED = 1000
 PLAYER_SINK_SPEED = 80
+
+# Jump mechanics
+PLAYER_JUMP_VELOCITY = -400  # Initial upward velocity
+PLAYER_JUMP_GRAVITY = 1200  # Gravity during jump
+PLAYER_MAX_FALL_SPEED = 600  # Terminal velocity during jump
+PLAYER_JUMP_KEY = pygame.K_SPACE  # Default jump key
 
 PLAYER_ANIMATION_PATHS = {
 	"idle": {
