@@ -40,24 +40,28 @@ class GameManager:
         self.background_surface = load_background_surface(WINDOW_SIZE)
         (
             self.map_surface,
+            self.destructible_surface,
             self.tmx_data,
             self.walkable_mask,
             self.walkable_bounds,
+            self.map_scale_x,
+            self.map_scale_y,
+            self.map_offset,
         ) = load_tilemap_surface(WINDOW_SIZE)
         self.walkable_debug_surface = None
         self.original_walkable_mask = self.walkable_mask.copy() if self.walkable_mask else None
 
-        # Calculate scale factors for TMX tile manager
-        if self.tmx_data and self.map_surface:
-            from assets import _calculate_surface_size
-            raw_width, raw_height = _calculate_surface_size(self.tmx_data)
-            scale_x = WINDOW_SIZE[0] / raw_width if raw_width > 0 else 1.0
-            scale_y = WINDOW_SIZE[1] / raw_height if raw_height > 0 else 1.0
-        else:
-            scale_x = scale_y = 1.0
-
         # Initialize game systems
-        self.tile_manager = TMXTileManager(self.tmx_data, scale_x, scale_y)
+        offset = self.map_offset if self.map_offset else (0, 0)
+        scale_x = self.map_scale_x if self.map_scale_x else 1.0
+        scale_y = self.map_scale_y if self.map_scale_y else 1.0
+        self.tile_manager = TMXTileManager(
+            self.tmx_data,
+            scale_x,
+            scale_y,
+            offset,
+            destructible_surface=self.destructible_surface,
+        )
         self.hazard_manager = HazardManager()
         self.hud = GameHUD()
         self.water = AnimatedWater()
@@ -259,15 +263,15 @@ class GameManager:
         self.hud.set_player_info(self.player_name, len(self.players), len(self.players))
 
     def _draw_tmx_map_with_tiles(self):
-        """Draw TMX map, then draw void holes over disappeared tiles."""
+        """Draw TMX map layers, letting missing tiles reveal the background."""
         if not self.tmx_data or not self.map_surface:
             return
 
         # Draw the full map surface
         self.screen.blit(self.map_surface, (0, 0))
 
-        # Draw polished void holes over disappeared tiles (not raw black)
-        self.tile_manager.draw_disappeared_holes(self.screen, self.background_surface)
+        if self.destructible_surface:
+            self.screen.blit(self.destructible_surface, (0, 0))
 
     def _draw_walkable_debug(self):
         if not (DEBUG_VISUALS_ENABLED and DEBUG_DRAW_WALKABLE) or self.walkable_mask is None:

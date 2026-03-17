@@ -14,6 +14,10 @@ WINDOW_TITLE = "GRID SURVIVAL"
 BACKGROUND_COLOR = (18, 18, 22)
 TARGET_FPS = 60
 
+# Map scaling behavior (auto_fit keeps legacy behavior; manual lets you zoom tiles)
+MAP_SCALE_MODE = "manual"  # options: "auto_fit", "manual"
+MAP_MANUAL_SCALE = 1        # used when MAP_SCALE_MODE == "manual"; >1 enlarges tiles
+
 PLAYER_FRAME_DURATION = 1 / 24
 PLAYER_SCALE = 0.2
 PLAYER_START_POS = (WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2)
@@ -53,6 +57,7 @@ PLAYER_ANIMATION_PATHS = {
 WALKABLE_LAYER_NAMES = ["Top"]
 WALKABLE_OBJECT_CLASS_NAMES = ["Platform"]
 WALKABLE_ISO_TOP_FRACTION = 1
+DESTRUCTIBLE_LAYER_NAMES = ["Top"]
 
 DEBUG_VISUALS_ENABLED = False
 DEBUG_DRAW_WALKABLE = True

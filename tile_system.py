@@ -236,12 +236,22 @@ class TMXTileManager:
     Works with the existing TMX map data and walkable mask.
     """
 
-    def __init__(self, tmx_data, scale_x: float = 1.0, scale_y: float = 1.0):
+    def __init__(self, tmx_data, scale_x: float = 1.0, scale_y: float = 1.0,
+                 offset: Optional[Tuple[int, int]] = None,
+                 destructible_surface: Optional[pygame.Surface] = None):
         self.tmx_data = tmx_data
         self.scale_x = scale_x
         self.scale_y = scale_y
+        if offset:
+            self.offset_x, self.offset_y = offset
+        else:
+            self.offset_x = self.offset_y = 0
         self.tiles: Dict[Tuple[int, int], TMXTile] = {}
         self.disappeared_tiles: List[TMXTile] = []
+        self.destructible_surface = destructible_surface
+        self.original_destructible_surface = (
+            destructible_surface.copy() if destructible_surface else None
+        )
 
         # Difficulty scaling parameters
         self.time_elapsed = 0.0
@@ -280,8 +290,8 @@ class TMXTileManager:
                 if gid == 0:
                     continue
                 pixel_x, pixel_y = self._tile_to_pixel(x, y, layer)
-                scaled_x = int(pixel_x * self.scale_x)
-                scaled_y = int(pixel_y * self.scale_y)
+                scaled_x = int(pixel_x * self.scale_x) + self.offset_x
+                scaled_y = int(pixel_y * self.scale_y) + self.offset_y
                 scaled_width = int(self.tmx_data.tilewidth * self.scale_x)
                 scaled_height = int(self.tmx_data.tileheight * self.scale_y)
                 tile = TMXTile(x, y, scaled_x, scaled_y, scaled_width, scaled_height, gid)
@@ -328,6 +338,7 @@ class TMXTileManager:
             if just_disappeared:
                 self.disappeared_tiles.append(tile)
                 self.audio.play_sfx(SOUND_TILE_DISAPPEAR)
+                self._erase_tile_from_surface(tile)
 
         # Trigger new tile warnings based on difficulty
         if self.disappear_timer >= self.current_interval:
@@ -389,6 +400,12 @@ class TMXTileManager:
                 # Draw a subtle inner shadow border
                 pygame.draw.polygon(surface, (20, 20, 30), points, 2)
 
+    def _erase_tile_from_surface(self, tile: TMXTile):
+        """Punch a transparent hole in the destructible overlay for the given tile."""
+        if not self.destructible_surface:
+            return
+        pygame.draw.polygon(self.destructible_surface, (0, 0, 0, 0), tile.get_diamond_points())
+
     # ── walkable mask ──────────────────────────────────────────────────────
 
     def get_updated_walkable_mask(self, original_mask: pygame.mask.Mask) -> pygame.mask.Mask:
@@ -433,3 +450,5 @@ class TMXTileManager:
         self.current_interval = self.base_disappear_interval
         self.disappear_timer = 0.0
         self.simultaneous_tiles = 1
+        if self.destructible_surface and self.original_destructible_surface:
+            self.destructible_surface.blit(self.original_destructible_surface, (0, 0))
