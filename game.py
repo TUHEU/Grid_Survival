@@ -40,7 +40,6 @@ class GameManager:
         self.background_surface = load_background_surface(WINDOW_SIZE)
         (
             self.map_surface,
-            self.destructible_surface,
             self.tmx_data,
             self.walkable_mask,
             self.walkable_bounds,
@@ -60,7 +59,6 @@ class GameManager:
             scale_x,
             scale_y,
             offset,
-            destructible_surface=self.destructible_surface,
         )
         self.hazard_manager = HazardManager()
         self.hud = GameHUD()
@@ -270,8 +268,7 @@ class GameManager:
         # Draw the full map surface
         self.screen.blit(self.map_surface, (0, 0))
 
-        if self.destructible_surface:
-            self.screen.blit(self.destructible_surface, (0, 0))
+        self.tile_manager.draw_active_tiles(self.screen)
 
     def _draw_walkable_debug(self):
         if not (DEBUG_VISUALS_ENABLED and DEBUG_DRAW_WALKABLE) or self.walkable_mask is None:

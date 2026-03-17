@@ -202,30 +202,21 @@ def load_tilemap_surface(window_size):
     """Load the TMX tilemap, scale it, and build the walkable mask."""
     if load_pygame is None:
         print("Install pytmx (pip install pytmx) to render Tiled maps.")
-        return None, None, None, None, None, 1.0, 1.0, (0, 0)
+        return None, None, None, None, 1.0, 1.0, (0, 0)
 
     if not MAP_PATH.exists():
         print(f"Map file not found: {MAP_PATH}")
-        return None, None, None, None, None, 1.0, 1.0, (0, 0)
+        return None, None, None, None, 1.0, 1.0, (0, 0)
 
     tmx_data = load_pygame(MAP_PATH.as_posix())
     destructible_layers = DESTRUCTIBLE_LAYER_NAMES or []
     raw_surface = _render_tmx_to_surface(
         tmx_data,
-        exclude_layers=destructible_layers,
+        exclude_layers=destructible_layers if destructible_layers else None,
     )
-    destructible_raw = _render_tmx_to_surface(
-        tmx_data,
-        include_layers=destructible_layers,
-    ) if destructible_layers else pygame.Surface(raw_surface.get_size(), pygame.SRCALPHA)
 
     scale_x, scale_y = _determine_scaling(raw_surface.get_width(), raw_surface.get_height(), window_size)
     scaled_surface, offset, scaled_size = _blit_scaled(raw_surface, window_size, scale_x, scale_y)
-
-    destructible_canvas = pygame.Surface(window_size, pygame.SRCALPHA)
-    if destructible_raw.get_width() and destructible_raw.get_height():
-        destructible_scaled = pygame.transform.smoothscale(destructible_raw, scaled_size)
-        destructible_canvas.blit(destructible_scaled, offset)
 
 
     walkable_surface_raw = _render_walkable_surface(
@@ -253,7 +244,6 @@ def load_tilemap_surface(window_size):
 
     return (
         scaled_surface,
-        destructible_canvas,
         tmx_data,
         walkable_mask,
         walkable_bounds,
