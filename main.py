@@ -1,5 +1,6 @@
 import pygame
 
+from audio import get_audio
 from game import GameManager
 from scenes import ModeSelectionScreen, TitleScreen
 from settings import WINDOW_SIZE, WINDOW_TITLE
@@ -23,12 +24,8 @@ def main():
         pygame.quit()
         return
 
-    # Stop menu music before gameplay starts.
-    try:
-        if pygame.mixer.get_init():
-            pygame.mixer.music.fadeout(500)
-    except pygame.error:
-        pass
+    # Stop menu music before gameplay starts so gameplay can control audio.
+    get_audio().stop_music(fade_ms=500)
 
     GameManager(screen=screen, clock=clock, player_name=player_name, game_mode=game_mode).run()
 

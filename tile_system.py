@@ -10,6 +10,7 @@ import pygame
 from enum import Enum
 from typing import List, Dict, Tuple, Optional
 
+from audio import get_audio
 from settings import (
     WINDOW_SIZE,
     WALKABLE_LAYER_NAMES,
@@ -18,22 +19,6 @@ from settings import (
     SOUND_TILE_WARNING,
     SOUND_TILE_DISAPPEAR,
 )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sound loader helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _load_sound(path: str) -> Optional[pygame.mixer.Sound]:
-    """Load a sound file gracefully; returns None if unavailable."""
-    try:
-        if not pygame.mixer.get_init():
-            pygame.mixer.init()
-        sound = pygame.mixer.Sound(path)
-        return sound
-    except (pygame.error, FileNotFoundError, OSError) as exc:
-        print(f"[TileSystem] Warning: could not load sound '{path}': {exc}")
-        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -271,9 +256,8 @@ class TMXTileManager:
         self.grace_timer = 0.0
         self.grace_period = TILE_GRACE_PERIOD
 
-        # Sound effects
-        self._snd_warning = _load_sound(SOUND_TILE_WARNING)
-        self._snd_disappear = _load_sound(SOUND_TILE_DISAPPEAR)
+        # Audio access
+        self.audio = get_audio()
 
         # Build tile registry from TMX data
         self._build_tile_registry()
@@ -343,8 +327,7 @@ class TMXTileManager:
             just_disappeared = tile.update(dt)
             if just_disappeared:
                 self.disappeared_tiles.append(tile)
-                if self._snd_disappear:
-                    self._snd_disappear.play()
+                self.audio.play_sfx(SOUND_TILE_DISAPPEAR)
 
         # Trigger new tile warnings based on difficulty
         if self.disappear_timer >= self.current_interval:
@@ -378,8 +361,7 @@ class TMXTileManager:
 
         for tile in tiles_to_warn:
             tile.set_warning()
-            if self._snd_warning:
-                self._snd_warning.play()
+            self.audio.play_sfx(SOUND_TILE_WARNING)
 
     # ── drawing ────────────────────────────────────────────────────────────
 

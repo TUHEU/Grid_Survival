@@ -2,7 +2,7 @@ import pygame
 
 from ai_player import AIPlayer
 from assets import load_background_surface, load_tilemap_surface
-from audio import AudioManager
+from audio import get_audio
 from player import Player
 from water import AnimatedWater
 from tile_system import TMXTileManager, TileState
@@ -21,17 +21,6 @@ from settings import (
     WINDOW_TITLE,
     SOUND_PLAYER_FALL,
 )
-
-
-def _load_sound_safe(path: str):
-    """Load a sound file gracefully; returns None if unavailable."""
-    try:
-        if not pygame.mixer.get_init():
-            pygame.mixer.init()
-        return pygame.mixer.Sound(path)
-    except (pygame.error, FileNotFoundError, OSError) as exc:
-        print(f"[Game] Warning: could not load sound '{path}': {exc}")
-        return None
 
 
 class GameManager:
@@ -73,9 +62,6 @@ class GameManager:
         self.hud = GameHUD()
         self.water = AnimatedWater()
 
-        # Sound effects
-        self._snd_player_fall = _load_sound_safe(SOUND_PLAYER_FALL)
-
         # Initialize players based on game mode
         self.players = []
         self.eliminated_players = []
@@ -108,7 +94,7 @@ class GameManager:
             self.hud.set_player_info(player_name, 1, 1)
 
         self.game_over = False
-        self.audio = AudioManager()
+        self.audio = get_audio()
         self.audio.play_music()
 
     def handle_events(self):
@@ -156,8 +142,7 @@ class GameManager:
 
             # Play fall sound when player starts falling
             if not was_falling_before and player.is_falling():
-                if self._snd_player_fall:
-                    self._snd_player_fall.play()
+                self.audio.play_sfx(SOUND_PLAYER_FALL)
 
             # Check water contact
             self._check_water_contact(player)

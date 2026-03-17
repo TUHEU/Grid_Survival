@@ -8,6 +8,7 @@ import random
 
 import pygame
 
+from audio import get_audio
 from settings import (
     # Audio
     MUSIC_PATH,
@@ -128,6 +129,7 @@ class TitleScreen:
         self.screen = screen
         self.clock = clock
         self.width, self.height = WINDOW_SIZE
+        self.audio = get_audio()
 
         # Font hierarchy
         self._font_display = _load_font(FONT_PATH_DISPLAY, FONT_SIZE_DISPLAY, bold=True)
@@ -168,17 +170,12 @@ class TitleScreen:
     # ── music ──────────────────────────────────────────────────────────────
 
     def _start_music(self) -> None:
-        try:
-            if not pygame.mixer.get_init():
-                pygame.mixer.init()
-            if MUSIC_PATH.exists():
-                pygame.mixer.music.load(str(MUSIC_PATH))
-                pygame.mixer.music.set_volume(MUSIC_VOLUME)
-                pygame.mixer.music.play(-1)
-            else:
-                print(f"Music file not found: {MUSIC_PATH}")
-        except pygame.error as err:
-            print(f"Music init/load failed: {err}")
+        self.audio.play_music(
+            track=MUSIC_PATH,
+            loop=True,
+            fade_ms=1500,
+            volume=MUSIC_VOLUME,
+        )
 
     # ── title letter setup ─────────────────────────────────────────────────
 
