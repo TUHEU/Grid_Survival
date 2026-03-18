@@ -59,7 +59,7 @@ WALKABLE_OBJECT_CLASS_NAMES = ["Platform"]
 WALKABLE_ISO_TOP_FRACTION = 1
 DESTRUCTIBLE_LAYER_NAMES = ["Top"]
 
-DEBUG_VISUALS_ENABLED = True
+DEBUG_VISUALS_ENABLED = False
 DEBUG_DRAW_WALKABLE = True
 DEBUG_WALKABLE_COLOR = (30, 144, 255)
 DEBUG_DRAW_PLAYER_FOOTBOX = True
@@ -71,7 +71,7 @@ WATER_SPRITESHEET = ASSETS_DIR / "Background" / "Water" / "Animated Water.png"
 WATER_FRAME_SIZE = (192, 96)
 WATER_FRAME_COUNT = 24
 WATER_FRAME_DURATION = 1 / 12
-WATER_TARGET_HEIGHT = 1
+WATER_TARGET_HEIGHT = 0
 WATER_SPLASH_SPRITESHEET = (
 	ASSETS_DIR / "Background" / "Water" / "Animated Water-Splash-Sheet-192x1344.png"
 )
@@ -79,6 +79,38 @@ WATER_SPLASH_FRAME_SIZE = (192, 192)
 WATER_SPLASH_FRAME_COUNT = 7
 WATER_SPLASH_FRAME_DURATION = 1 / 18
 WATER_SPLASH_SIZE = (256, 256)
+
+# Terrain animation themes let you swap the edge effect (water, lava, void, etc.)
+# without touching code. Set ACTIVE_TERRAIN_THEME to pick which entry should run
+# and edit/duplicate the dictionaries below to point at the correct art.
+ACTIVE_TERRAIN_THEME = "space"  # options: "space", "water", add more as needed
+TERRAIN_THEMES = {
+	"space": {
+		"base": None,   # No base animation for outer space
+		"splash": None, # No splash effect
+	},
+	"water": {
+		"base": {
+			"spritesheet": WATER_SPRITESHEET,
+			"frame_size": WATER_FRAME_SIZE,
+			"frame_count": WATER_FRAME_COUNT,
+			"frame_duration": WATER_FRAME_DURATION,
+			"target_height": WATER_TARGET_HEIGHT,
+		},
+		"splash": {
+			"spritesheet": WATER_SPLASH_SPRITESHEET,
+			"frame_size": WATER_SPLASH_FRAME_SIZE,
+			"frame_count": WATER_SPLASH_FRAME_COUNT,
+			"frame_duration": WATER_SPLASH_FRAME_DURATION,
+			"size": WATER_SPLASH_SIZE,
+		},
+	},
+	"lava": {
+		# Example placeholder — point these at your lava assets when ready.
+		"base": None,
+		"splash": None,
+	},
+}
 
 USE_AI_PLAYER = True
 AI_DECISION_INTERVAL = 0.22

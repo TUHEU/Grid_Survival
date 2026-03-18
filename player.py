@@ -212,7 +212,7 @@ class Player:
         return overlap == self._feet_mask_count
 
     def _feet_rect(self, position: pygame.Vector2) -> pygame.Rect:
-        width = max(4, int(self.rect.width * 0.15))
+        width = max(4, int(self.rect.width * 0.03))
         height = max(4, int(self.rect.height * 0.03))
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (

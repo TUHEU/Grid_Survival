@@ -49,6 +49,7 @@
             "scaleInEditor": 1
         },
         "tilesfloorbig.tsx": {
+            "dynamicWrapping": true,
             "scaleInDock": 1,
             "scaleInEditor": 1
         }
