@@ -38,8 +38,10 @@ class Player:
         self.rect = self.current_animation.image.get_rect(center=position)
         self._feet_mask = None
         self._feet_mask_count = 0
-        self._collision_mask = pygame.mask.from_surface(self.current_animation.image)
-        self._collision_mask_offset = pygame.Vector2(0, 0)
+        self._collision_mask = None
+        self._collision_mask_surface_id = None
+        self._collision_outline = []
+        self._refresh_collision_shape(force=True)
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
@@ -83,7 +85,7 @@ class Player:
         self.facing = direction
         self.current_animation = self.animations[state][direction]
         self.current_animation.reset()
-        self._collision_mask = pygame.mask.from_surface(self.current_animation.image)
+        self._refresh_collision_shape(force=True)
 
     def _input_vector(self, keys) -> pygame.Vector2:
         direction = pygame.Vector2(0, 0)
@@ -219,11 +221,35 @@ class Player:
         )
         return rect
 
+    def _refresh_collision_shape(self, force: bool = False):
+        surface = self.current_animation.image
+        surface_id = id(surface)
+        if not force and surface_id == self._collision_mask_surface_id:
+            return
+        self._collision_mask = pygame.mask.from_surface(surface)
+        self._collision_mask_surface_id = surface_id
+        self._collision_outline = self._collision_mask.outline()
+
     def draw(self, surface: pygame.Surface):
         surface.blit(self.current_animation.image, self.rect.topleft)
         if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_FOOTBOX:
             feet_rect = self._feet_rect(self.position)
             pygame.draw.rect(surface, DEBUG_PLAYER_FOOTBOX_COLOR, feet_rect, 1)
+        if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_COLLISION:
+            self._refresh_collision_shape()
+            if len(self._collision_outline) >= 2:
+                offset_x, offset_y = self.rect.topleft
+                outline_points = [
+                    (offset_x + point[0], offset_y + point[1])
+                    for point in self._collision_outline
+                ]
+                pygame.draw.lines(
+                    surface,
+                    DEBUG_PLAYER_COLLISION_COLOR,
+                    True,
+                    outline_points,
+                    1,
+                )
 
     def reset(self):
         self.position = pygame.Vector2(PLAYER_START_POS)
@@ -242,6 +268,7 @@ class Player:
         self.jumping = False
         self.jump_velocity = 0.0
         self.on_ground = True
+        self._refresh_collision_shape(force=True)
 
     def _feet_mask_for_rect(self, rect: pygame.Rect) -> pygame.mask.Mask:
         size = rect.size
