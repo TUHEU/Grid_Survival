@@ -3,6 +3,7 @@ import pygame
 from ai_player import AIPlayer
 from assets import load_background_surface, load_tilemap_surface
 from audio import get_audio
+from collision_manager import CollisionManager
 from player import Player
 from water import AnimatedWater
 from tile_system import TMXTileManager, TileState
@@ -60,7 +61,8 @@ class GameManager:
             scale_y,
             offset,
         )
-        self.hazard_manager = HazardManager()
+        self.collision_manager = CollisionManager()
+        self.hazard_manager = HazardManager(self.collision_manager)
         self.hud = GameHUD()
         self.water = AnimatedWater()
 
@@ -150,7 +152,7 @@ class GameManager:
             self._check_water_contact(player)
 
             # Check hazard collisions
-            if self.hazard_manager.check_player_collision(player.rect):
+            if self.hazard_manager.check_player_collision(player):
                 self._eliminate_player(player, "hit by hazard")
 
             # Check if player fell off screen

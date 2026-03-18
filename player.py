@@ -5,6 +5,8 @@ from settings import (
     DEBUG_DRAW_PLAYER_FOOTBOX,
     DEBUG_PLAYER_FOOTBOX_COLOR,
     DEBUG_VISUALS_ENABLED,
+    DEBUG_DRAW_PLAYER_COLLISION,
+    DEBUG_PLAYER_COLLISION_COLOR,
     PLAYER_ANIMATION_PATHS,
     PLAYER_DEFAULT_DIRECTION,
     PLAYER_FRAME_DURATION,
@@ -36,6 +38,8 @@ class Player:
         self.rect = self.current_animation.image.get_rect(center=position)
         self._feet_mask = None
         self._feet_mask_count = 0
+        self._collision_mask = pygame.mask.from_surface(self.current_animation.image)
+        self._collision_mask_offset = pygame.Vector2(0, 0)
         self.falling = False
         self.fall_velocity = 0.0
         self.fall_draw_behind = False
@@ -79,6 +83,7 @@ class Player:
         self.facing = direction
         self.current_animation = self.animations[state][direction]
         self.current_animation.reset()
+        self._collision_mask = pygame.mask.from_surface(self.current_animation.image)
 
     def _input_vector(self, keys) -> pygame.Vector2:
         direction = pygame.Vector2(0, 0)
