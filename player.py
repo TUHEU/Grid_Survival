@@ -1,13 +1,13 @@
 import pygame
 
 from animation import SpriteAnimation, load_frames_from_directory
+from character_manager import DEFAULT_CHARACTER_NAME, build_animation_paths
 from settings import (
     DEBUG_DRAW_PLAYER_FOOTBOX,
     DEBUG_PLAYER_FOOTBOX_COLOR,
     DEBUG_VISUALS_ENABLED,
     DEBUG_DRAW_PLAYER_COLLISION,
     DEBUG_PLAYER_COLLISION_COLOR,
-    PLAYER_ANIMATION_PATHS,
     PLAYER_DEFAULT_DIRECTION,
     PLAYER_FRAME_DURATION,
     PLAYER_FALL_GRAVITY,
@@ -26,13 +26,14 @@ from settings import (
 class Player:
     """Animated player entity with directional movement."""
 
-    def __init__(self, position=PLAYER_START_POS, controls=None):
+    def __init__(self, position=PLAYER_START_POS, controls=None, character_name: str | None = None):
         self.is_ai = False
         self.position = pygame.Vector2(position)
         self.speed = PLAYER_SPEED
         self.state = "idle"
         self.facing = PLAYER_DEFAULT_DIRECTION
         self.velocity = pygame.Vector2(0, 0)
+        self.character_name = character_name or DEFAULT_CHARACTER_NAME
         self.animations = self._load_animations()
         self.current_animation = self.animations[self.state][self.facing]
         self.rect = self.current_animation.image.get_rect(center=position)
@@ -65,7 +66,8 @@ class Player:
 
     def _load_animations(self):
         animations = {}
-        for state, dirs in PLAYER_ANIMATION_PATHS.items():
+        animation_paths = build_animation_paths(self.character_name)
+        for state, dirs in animation_paths.items():
             animations[state] = {}
             for direction, path in dirs.items():
                 frames = load_frames_from_directory(path, scale=PLAYER_SCALE)

@@ -27,7 +27,14 @@ from settings import (
 class GameManager:
     """Main game application wrapper with full feature integration."""
 
-    def __init__(self, screen=None, clock=None, player_name: str = "Player", game_mode: str = MODE_VS_COMPUTER):
+    def __init__(
+        self,
+        screen=None,
+        clock=None,
+        player_name: str = "Player",
+        game_mode: str = MODE_VS_COMPUTER,
+        selected_characters: list[str] | None = None,
+    ):
         if screen is None or clock is None:
             pygame.init()
         self.screen = screen or pygame.display.set_mode(WINDOW_SIZE)
@@ -36,6 +43,7 @@ class GameManager:
         self.running = True
         self.player_name = player_name
         self.game_mode = game_mode
+        self.selected_characters = selected_characters or []
 
         # Load assets
         self.background_surface = load_background_surface(WINDOW_SIZE)
@@ -72,9 +80,10 @@ class GameManager:
         self.elimination_screen = None
 
         if self.game_mode == MODE_VS_COMPUTER:
-            use_ai = USE_AI_PLAYER
-            self.players.append(AIPlayer() if use_ai else Player())
-            self.hud.set_player_info(player_name, 1, 1)
+            primary_char = self._character_choice(0)
+            self.players.append(Player(character_name=primary_char))
+            if USE_AI_PLAYER:
+                self.players.append(AIPlayer())
         elif self.game_mode == MODE_LOCAL_MULTIPLAYER:
             player1_controls = {
                 'up': pygame.K_w,
@@ -90,12 +99,16 @@ class GameManager:
                 'right': pygame.K_RIGHT,
                 'jump': pygame.K_RSHIFT
             }
-            self.players.append(Player(controls=player1_controls))
-            self.players.append(Player(controls=player2_controls))
-            self.hud.set_player_info(player_name, 2, 2)
+            self.players.append(
+                Player(controls=player1_controls, character_name=self._character_choice(0))
+            )
+            self.players.append(
+                Player(controls=player2_controls, character_name=self._character_choice(1))
+            )
         else:
-            self.players.append(Player())
-            self.hud.set_player_info(player_name, 1, 1)
+            self.players.append(Player(character_name=self._character_choice(0)))
+
+        self.hud.set_player_info(player_name, len(self.players), len(self.players))
 
         self.game_over = False
         self.audio = get_audio()
@@ -283,6 +296,13 @@ class GameManager:
             )
 
         self.screen.blit(self.walkable_debug_surface, (0, 0))
+
+    def _character_choice(self, index: int) -> str | None:
+        if not self.selected_characters:
+            return None
+        if 0 <= index < len(self.selected_characters):
+            return self.selected_characters[index]
+        return self.selected_characters[-1]
 
     def run(self):
         while self.running:
