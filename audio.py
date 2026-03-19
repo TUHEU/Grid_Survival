@@ -20,6 +20,8 @@ class AudioManager:
         self._initialized = False
         self._current_music: Optional[Path] = None
         self._sfx_cache: Dict[Path, pygame.mixer.Sound] = {}
+        self._is_muted = False
+        self._music_volume = 0.45  # Default volume
         self._ensure_mixer()
 
     def _ensure_mixer(self):
@@ -53,8 +55,14 @@ class AudioManager:
             if restart or self._current_music != music_path:
                 pygame.mixer.music.load(music_path.as_posix())
                 self._current_music = music_path
+            
             if volume is not None:
-                pygame.mixer.music.set_volume(self._clamp_volume(volume))
+                self._music_volume = self._clamp_volume(volume)
+            
+            # Apply volume based on mute state
+            effective_vol = 0.0 if self._is_muted else self._music_volume
+            pygame.mixer.music.set_volume(effective_vol)
+
             loops = -1 if loop else 0
             pygame.mixer.music.play(loops=loops, fade_ms=max(0, fade_ms))
         except pygame.error as exc:
@@ -71,7 +79,7 @@ class AudioManager:
 
     def play_sfx(
         self,
-        identifier: Union[str, Path],
+        identifier: Union[str, P or self._is_mutedath],
         *,
         volume: float = 1.0,
         cache: bool = True,
@@ -108,6 +116,21 @@ class AudioManager:
             self._sfx_cache[sound_path] = pygame.mixer.Sound(sound_path.as_posix())
         except pygame.error as exc:
             print(f"[Audio] Failed to preload SFX '{sound_path.name}': {exc}")
+
+    @property
+    def is_muted(self) -> bool:
+        return self._is_muted
+
+    def toggle_mute(self):
+        """Toggle audio mute state."""
+        self._is_muted = not self._is_muted
+        if not self._initialized:
+            return
+            
+        if self._is_muted:
+            pygame.mixer.music.set_volume(0.0)
+        else:
+            pygame.mixer.music.set_volume(self._music_volume)
 
     def _resolve_music_path(self, track: Union[str, Path, None]) -> Optional[Path]:
         if track is None:
