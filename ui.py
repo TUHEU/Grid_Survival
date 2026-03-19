@@ -107,6 +107,8 @@ class GameHUD:
         # Timer urgency pulse
         self._pulse_timer = 0.0
 
+        self.mute_rect = None   # Mute button hit area
+
     def update(self, dt: float):
         """Update HUD state."""
         self.survival_time += dt
@@ -169,12 +171,35 @@ class GameHUD:
         remaining_in_minute = 60 - (self.survival_time % 60)
         return remaining_in_minute <= TIMER_WARNING_THRESHOLD
 
-    def draw(self, surface: pygame.Surface):
+    def draw(self, surface: pygame.Surface, is_muted: bool = False):
         """Draw HUD elements."""
         self._draw_score_panel(surface)
         self._draw_timer_panel(surface)
+        self._draw_mute_button(surface, is_muted)
         if self.total_players > 1:
             self._draw_alive_panel(surface)
+
+    def _draw_mute_button(self, surface: pygame.Surface, is_muted: bool):
+        """Draw a clickable mute button."""
+        label = "MUTED" if is_muted else "AUDIO"
+        # Use existing colors: Red for muted, Green for active
+        color = HUD_TIMER_URGENT_COLOR if is_muted else HUD_ALIVE_BORDER_COLOR_ALL
+
+        label_surf = self._font_label.render(label, True, color)
+
+        panel_w = label_surf.get_width() + HUD_PANEL_PADDING_H * 2
+        panel_h = label_surf.get_height() + HUD_PANEL_PADDING_V * 2
+        
+        # Position below Score panel (Score is at 20, 20 with height ~80-100)
+        # Let's put it at (20, 110)
+        self.mute_rect = pygame.Rect(20, 110, panel_w, panel_h)
+
+        _draw_panel(surface, self.mute_rect, HUD_PANEL_BG, color,
+                    HUD_PANEL_BORDER_WIDTH, 8, glow=False)
+
+        lx = self.mute_rect.centerx - label_surf.get_width() // 2
+        ly = self.mute_rect.centery - label_surf.get_height() // 2
+        surface.blit(label_surf, (lx, ly))
 
     def _draw_score_panel(self, surface: pygame.Surface):
         """Score panel — top-left."""
