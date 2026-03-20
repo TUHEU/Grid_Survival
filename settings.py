@@ -44,10 +44,10 @@ PLAYER_FALL_MAX_SPEED = 1000
 PLAYER_SINK_SPEED = 80
 
 # Jump mechanics
-PLAYER_JUMP_VELOCITY = -650        # Increased from -400 (more snappy)
-PLAYER_JUMP_GRAVITY = 2000         # Increased from 1200 (falls faster)
-PLAYER_MAX_FALL_SPEED = 600  # Terminal velocity during jump
-PLAYER_JUMP_KEY = pygame.K_SPACE  # Default jump key
+PLAYER_JUMP_VELOCITY = 650         # Initial upward Z velocity (Positive = UP)
+PLAYER_JUMP_GRAVITY = 2000         # Gravity acceleration on Z axis
+PLAYER_MAX_FALL_SPEED = 1000       # Max fall speed for Z axis
+PLAYER_JUMP_KEY = pygame.K_SPACE   # Default jump key
 
 PLAYER_ANIMATION_PATHS = {
 	"idle": {
