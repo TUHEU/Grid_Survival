@@ -240,7 +240,8 @@ class TMXTileManager:
     """
 
     def __init__(self, tmx_data, scale_x: float = 1.0, scale_y: float = 1.0,
-                 offset: Optional[Tuple[int, int]] = None):
+                 offset: Optional[Tuple[int, int]] = None, level_config=None,
+                 forced_arena=None):
         self.tmx_data = tmx_data
         self.scale_x = scale_x
         self.scale_y = scale_y
@@ -251,24 +252,43 @@ class TMXTileManager:
         self.tiles: Dict[Tuple[int, int], TMXTile] = {}
         self.disappeared_tiles: List[TMXTile] = []
 
-        # Difficulty scaling parameters
-        self.time_elapsed = 0.0
-        self.base_disappear_interval = 3.0
-        self.min_disappear_interval = 0.8
-        self.difficulty_scale_rate = 0.95
+        # Pull difficulty values from LevelConfig if provided
+        td = level_config.tile if level_config else None
+        self.base_disappear_interval = td.base_interval if td else 3.0
+        self.min_disappear_interval  = td.min_interval  if td else 0.8
+        self.difficulty_scale_rate   = td.scale_rate     if td else 0.95
+        self.simultaneous_tiles      = td.base_simultaneous if td else 1
+        self._max_simultaneous       = td.max_simultaneous  if td else 4
+        self._sim_ramp_times         = td.sim_ramp_times    if td else [30, 60, 90]
+        self._warning_duration_cfg   = td.warning_duration  if td else 1.5
+        self._target_player_tiles    = td.target_player     if td else False
+
         self.current_interval = self.base_disappear_interval
         self.disappear_timer = 0.0
-        self.simultaneous_tiles = 1
+        self.time_elapsed = 0.0
 
-        # Grace period before first tile disappears
         self.grace_timer = 0.0
-        self.grace_period = TILE_GRACE_PERIOD
+        self.grace_period = td.grace_period if td else TILE_GRACE_PERIOD
+
+        # Reference to human player for targeted tile removal (L4+)
+        self._target_player = None
+
+        # Arena shape — player-chosen arena overrides level default
+        if forced_arena is not None:
+            self._arena_shape = forced_arena
+        elif level_config is not None:
+            self._arena_shape = level_config.arena_shape
+        else:
+            self._arena_shape = None
+        self._level_config = level_config
 
         # Audio access
         self.audio = get_audio()
 
-        # Build tile registry from TMX data
+        # Build tile registry from TMX data then apply arena shape
         self._build_tile_registry()
+        self._apply_arena_shape()
+        self._apply_warning_durations()
 
     # ── setup ──────────────────────────────────────────────────────────────
 
@@ -285,9 +305,7 @@ class TMXTileManager:
             if not hasattr(layer, "tiles"):
                 continue
 
-            for x, y, image in layer.tiles():
-                # Retrieve the raw GID from the layer data grid
-                gid = layer.data[y][x]
+            for x, y, gid in layer:
                 if gid == 0:
                     continue
                 pixel_x, pixel_y = self._tile_to_pixel(x, y, layer)
@@ -295,9 +313,44 @@ class TMXTileManager:
                 scaled_y = int(pixel_y * self.scale_y) + self.offset_y
                 scaled_width = int(self.tmx_data.tilewidth * self.scale_x)
                 scaled_height = int(self.tmx_data.tileheight * self.scale_y)
-                scaled_image = self._get_scaled_tile_image(gid)
-                tile = TMXTile(x, y, scaled_x, scaled_y, scaled_width, scaled_height, gid, scaled_image)
+                image = self._get_scaled_tile_image(gid)
+                tile = TMXTile(x, y, scaled_x, scaled_y, scaled_width, scaled_height, gid, image)
                 self.tiles[(x, y)] = tile
+
+    def _apply_arena_shape(self):
+        """Remove tiles outside the level's arena shape by pre-disappearing them."""
+        if self._arena_shape is None:
+            return
+        from level_config import ArenaShape, build_active_set
+        if self._arena_shape == ArenaShape.FULL:
+            return   # nothing to remove
+
+        if not self.tiles:
+            return
+
+        xs = [k[0] for k in self.tiles]
+        ys = [k[1] for k in self.tiles]
+        grid_w = max(xs) - min(xs) + 1
+        grid_h = max(ys) - min(ys) + 1
+        min_x, min_y = min(xs), min(ys)
+
+        active = build_active_set(self._arena_shape, grid_w, grid_h)
+        # active set is zero-based; shift by grid origin
+        active_shifted = {(ax + min_x, ay + min_y) for ax, ay in active}
+
+        to_remove = [k for k in self.tiles if k not in active_shifted]
+        for key in to_remove:
+            self.tiles[key].state = TileState.DISAPPEARED
+
+    def _apply_warning_durations(self):
+        """Set the configured warning duration on every tile."""
+        for tile in self.tiles.values():
+            tile.warning_duration = self._warning_duration_cfg
+
+    def set_target_player(self, player):
+        """Register the human player for targeted tile removal."""
+        self._target_player = player
+
     def _get_scaled_tile_image(self, gid: int) -> Optional[pygame.Surface]:
         if gid == 0 or not self.tmx_data:
             return None
@@ -363,24 +416,47 @@ class TMXTileManager:
                 self.current_interval * self.difficulty_scale_rate
             )
 
-            # Increase simultaneous tiles over time
-            if self.time_elapsed > 30 and self.simultaneous_tiles < 3:
-                self.simultaneous_tiles = 2
-            elif self.time_elapsed > 60 and self.simultaneous_tiles < 4:
-                self.simultaneous_tiles = 3
+            # Ramp up simultaneous tiles using configured thresholds
+            for i, ramp_time in enumerate(self._sim_ramp_times):
+                target_sim = i + 2   # ramp_times[0] -> 2, [1] -> 3, [2] -> 4 …
+                if (self.time_elapsed > ramp_time and
+                        self.simultaneous_tiles < target_sim and
+                        target_sim <= self._max_simultaneous):
+                    self.simultaneous_tiles = target_sim
 
     def _trigger_random_tiles(self):
-        """Select random normal tiles and set them to warning state."""
+        """Select tiles to warn — prefers tiles near human player on higher levels."""
         normal_tiles = [t for t in self.tiles.values() if t.state == TileState.NORMAL]
         if not normal_tiles:
             return
 
-        min_safe_tiles = max(3, int(len(self.tiles) * 0.3))
+        min_safe_tiles = max(3, int(len(self.tiles) * 0.25))
         if len(normal_tiles) <= min_safe_tiles:
             return
 
         num_to_warn = min(self.simultaneous_tiles, len(normal_tiles) - min_safe_tiles)
-        tiles_to_warn = random.sample(normal_tiles, num_to_warn)
+
+        # On levels with target_player=True, bias toward tiles near the human
+        if self._target_player_tiles and self._target_player is not None:
+            import math as _math
+            tx = self._target_player.position.x
+            ty = self._target_player.position.y
+            # Score tiles by proximity to player (closer = higher priority)
+            def proximity(t):
+                return -_math.hypot(t.pixel_x - tx, t.pixel_y - ty)
+            normal_tiles.sort(key=proximity)
+            # Take a weighted sample: 60% from closest tiles, 40% random
+            close_n = max(num_to_warn, len(normal_tiles) // 3)
+            close_pool = normal_tiles[:close_n]
+            rand_pool = normal_tiles[close_n:]
+            n_close = max(1, int(num_to_warn * 0.6))
+            n_rand  = num_to_warn - n_close
+            chosen = random.sample(close_pool, min(n_close, len(close_pool)))
+            if n_rand > 0 and rand_pool:
+                chosen += random.sample(rand_pool, min(n_rand, len(rand_pool)))
+            tiles_to_warn = chosen[:num_to_warn]
+        else:
+            tiles_to_warn = random.sample(normal_tiles, num_to_warn)
 
         for tile in tiles_to_warn:
             tile.set_warning()
@@ -442,7 +518,7 @@ class TMXTileManager:
     # ── reset ──────────────────────────────────────────────────────────────
 
     def reset(self):
-        """Reset all tiles to normal state."""
+        """Reset all tiles to normal state then reapply arena shape."""
         for tile in self.tiles.values():
             tile.reset()
         self.disappeared_tiles.clear()
@@ -450,4 +526,9 @@ class TMXTileManager:
         self.grace_timer = 0.0
         self.current_interval = self.base_disappear_interval
         self.disappear_timer = 0.0
-        self.simultaneous_tiles = 1
+        # Restore starting simultaneous count from config
+        td = self._level_config.tile if self._level_config else None
+        self.simultaneous_tiles = td.base_simultaneous if td else 1
+        # Re-blank tiles that don't belong to this arena shape
+        self._apply_arena_shape()
+        self._apply_warning_durations()

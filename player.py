@@ -1,9 +1,7 @@
 import pygame
 
 from animation import SpriteAnimation, load_frames_from_directory
-from audio import get_audio
 from character_manager import DEFAULT_CHARACTER_NAME, build_animation_paths
-from powers import CharacterPower, get_power_for_character
 from settings import (
     DEBUG_DRAW_PLAYER_FOOTBOX,
     DEBUG_PLAYER_FOOTBOX_COLOR,
@@ -21,36 +19,40 @@ from settings import (
     PLAYER_JUMP_VELOCITY,
     PLAYER_JUMP_GRAVITY,
     PLAYER_MAX_FALL_SPEED,
-    PLAYER_MAX_HEALTH,
     WINDOW_SIZE,
-    SOUND_FOOTSTEP_STONE,
-    SOUND_FOOTSTEP_SOFT,
-    SOUND_JUMP,
-    SOUND_LAND,
-    SOUND_PLAYER_DROWN,
 )
 
 
 class Player:
-    """Animated player entity with directional movement."""
+    """Animated player entity with directional movement, powers, and orb buffs."""
 
-    def __init__(self, position=PLAYER_START_POS, controls=None, character_name: str | None = None,
-                 player_index: int = 0):
+    def __init__(self, position=PLAYER_START_POS, controls=None,
+                 character_name: str | None = None,
+                 player_index: int = 0, power_count: int = 1):
         self.is_ai = False
         self.position = pygame.Vector2(position)
         self.character_name = character_name or DEFAULT_CHARACTER_NAME
 
-        # ── Character power ────────────────────────────────────────────────
+        # Power system
+        from powers import CharacterPower, get_power_for_character, power_key_for_player
         self.power: CharacterPower = get_power_for_character(self.character_name)
-        # Runtime boost multipliers (can be set by the active power each frame)
         self._power_speed_boost: float = 1.0
-        self._power_jump_boost: float = 1.0
-        self._power_alpha: int = 255          # sprite transparency (e.g. ninja dash)
-        self._immune_to_hazards: bool = False  # reset by game after check
-
-        # Apply passive stat multipliers from the power
+        self._power_jump_boost:  float = 1.0
+        self._power_alpha:       int   = 255
+        self._immune_to_hazards: bool  = False
         self.speed = PLAYER_SPEED * self.power.speed_multiplier
         self._base_jump_velocity = PLAYER_JUMP_VELOCITY * self.power.jump_multiplier
+
+        # Orb buff slots
+        self._orb_speed_boost:   float = 1.0
+        self._orb_speed_timer:   float = 0.0
+        self._orb_shield:        bool  = False
+
+        # Audio
+        from audio import get_audio
+        self._audio = get_audio()
+        self._step_timer:    float = 0.0
+        self._step_interval: float = 0.28
 
         self.state = "idle"
         self.facing = PLAYER_DEFAULT_DIRECTION
@@ -75,13 +77,9 @@ class Player:
         self.jumping = False
         self.jump_velocity = 0.0
         self.on_ground = True
+        self._was_on_ground = True
 
-        # Health points - player dies when health reaches 0 (falling still kills instantly)
-        self.health = PLAYER_MAX_HEALTH
-        self.max_health = PLAYER_MAX_HEALTH
-
-        # Control scheme (for multiplayer)
-        from powers import power_key_for_player
+        # Control scheme
         self.controls = controls or {
             'up':    pygame.K_w,
             'down':  pygame.K_s,
@@ -90,16 +88,9 @@ class Player:
             'jump':  pygame.K_SPACE,
             'power': power_key_for_player(player_index),
         }
-        # Ensure legacy control dicts without 'power' get a default
         if 'power' not in self.controls:
-            self.controls['power'] = power_key_for_player(player_index)
-
-        # ── Audio ──────────────────────────────────────────────────────────
-        self._audio = get_audio()
-        # Footstep cadence: fire a step sound every N seconds of movement
-        self._step_timer: float = 0.0
-        self._step_interval: float = 0.28   # seconds between steps at full speed
-        self._was_on_ground: bool = True     # for land-sound detection
+            from powers import power_key_for_player as _pkfp
+            self.controls['power'] = _pkfp(player_index)
 
     def _load_animations(self):
         animations = {}
@@ -154,13 +145,20 @@ class Player:
         return self.facing
 
     def update(self, dt: float, keys, walkable_mask, walkable_bounds):
-        # Tick the power (cooldown, particles, active effect)
+        # Safety fallback
+        if not hasattr(self, "_orb_speed_timer"):
+            self._orb_speed_timer = 0.0
+            self._orb_speed_boost = 1.0
+
+        # Tick power cooldown and activate on keypress
         self.power.update(dt, self)
-
-        # Activate power on key press
-        if keys[self.controls['power']]:
+        if keys[self.controls.get('power', pygame.K_q)]:
             self.power.try_activate(self)
-
+        # Orb speed buff timer
+        if self._orb_speed_timer > 0:
+            self._orb_speed_timer -= dt
+            if self._orb_speed_timer <= 0:
+                self._orb_speed_boost = 1.0
         move_vector = self._input_vector(keys)
         jump_pressed = self._check_jump_input(keys)
         self._update_with_move_vector(dt, move_vector, walkable_mask, walkable_bounds, jump_pressed)
@@ -191,20 +189,14 @@ class Player:
             self.rect.center = (round(self.position.x), round(self.position.y))
             return
 
-        # Apply runtime power boosts to speed and jump
-        effective_speed = self.speed * self._power_speed_boost
-        effective_jump_velocity = self._base_jump_velocity * self._power_jump_boost
-
         # Check if on ground
         self.on_ground = self._is_over_platform(self.position, walkable_mask)
-
+        
         # Initiate jump
         if jump_pressed and self.on_ground:
             self.jumping = True
-            self.jump_velocity = effective_jump_velocity
+            self.jump_velocity = PLAYER_JUMP_VELOCITY
             self.on_ground = False
-            self._was_on_ground = False
-            self._audio.play_sfx(SOUND_JUMP, volume=0.5, volume_jitter=0.06, max_instances=2)
 
         desired_facing = (
             self._determine_facing(move_vector)
@@ -212,40 +204,18 @@ class Player:
             else self.facing
         )
 
-        # Detect landing (was airborne last frame, now on ground)
-        just_landed = (not self._was_on_ground) and self.on_ground and not self.jumping
-        self._was_on_ground = self.on_ground
-
         left_playable = False
         if move_vector.length_squared() > 0:
             move_vector = move_vector.normalize()
-            displacement = move_vector * effective_speed * dt
-            self.velocity = move_vector * effective_speed
+            displacement = move_vector * self.speed * dt
+            self.velocity = move_vector * self.speed
             left_playable = not self._attempt_move(displacement, walkable_mask)
             self._set_state("run", desired_facing)
-
-            # Footstep sound — throttled by _step_timer
-            if self.on_ground:
-                self._step_timer += dt
-                interval = self._step_interval / max(0.5, self._power_speed_boost)
-                if self._step_timer >= interval:
-                    self._step_timer = 0.0
-                    self._audio.play_sfx_random(
-                        SOUND_FOOTSTEP_STONE,
-                        volume=0.45,
-                        volume_jitter=0.08,
-                        max_instances=2,
-                    )
         else:
-            self._step_timer = 0.0
             self.velocity.update(0, 0)
             self._set_state("idle", desired_facing)
             if walkable_mask and not self._is_over_platform(self.position, walkable_mask):
                 left_playable = True
-
-        # Land sound
-        if just_landed:
-            self._audio.play_sfx(SOUND_LAND, volume=0.55, volume_jitter=0.08, max_instances=2)
 
         if left_playable:
             self._start_fall(walkable_bounds)
@@ -305,16 +275,12 @@ class Player:
         self._collision_outline = self._collision_mask.outline()
 
     def draw(self, surface: pygame.Surface):
-        frame = self.current_animation.image
-        # Apply power-driven transparency (e.g. ninja invisibility)
+        _frame = self.current_animation.image
         if self._power_alpha < 255:
-            frame = frame.copy()
-            frame.set_alpha(self._power_alpha)
-        surface.blit(frame, self.rect.topleft)
-
-        # Draw power particles / active effects
+            _frame = _frame.copy()
+            _frame.set_alpha(self._power_alpha)
+        surface.blit(_frame, self.rect.topleft)
         self.power.draw(surface, self)
-
         if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_FOOTBOX:
             feet_rect = self._feet_rect(self.position)
             pygame.draw.rect(surface, DEBUG_PLAYER_FOOTBOX_COLOR, feet_rect, 1)
@@ -351,13 +317,15 @@ class Player:
         self.jumping = False
         self.jump_velocity = 0.0
         self.on_ground = True
+        self._was_on_ground = True
+        self._step_timer = 0.0
         self._power_speed_boost = 1.0
-        self._power_jump_boost = 1.0
-        self._power_alpha = 255
+        self._power_jump_boost  = 1.0
+        self._power_alpha       = 255
         self._immune_to_hazards = False
-        # Reset health
-        self.health = PLAYER_MAX_HEALTH
-        self.max_health = PLAYER_MAX_HEALTH
+        self._orb_speed_boost   = 1.0
+        self._orb_speed_timer   = 0.0
+        self._orb_shield        = False
         self.power.reset()
         self._refresh_collision_shape(force=True)
 
@@ -414,8 +382,7 @@ class Player:
         # Allow horizontal movement during jump
         if move_vector.length_squared() > 0:
             move_vector = move_vector.normalize()
-            h_speed = self.speed * self._power_speed_boost
-            horizontal_displacement = pygame.Vector2(move_vector.x * h_speed * dt, 0)
+            horizontal_displacement = pygame.Vector2(move_vector.x * self.speed * dt, 0)
             proposed_x = self.position + horizontal_displacement
             if self._is_over_platform(proposed_x, walkable_mask):
                 self.position.x = proposed_x.x
@@ -458,7 +425,6 @@ class Player:
         self._set_state("death", self.facing)
         if draw_behind is not None:
             self.fall_draw_behind = draw_behind
-        self._audio.play_sfx(SOUND_PLAYER_DROWN, volume=0.65, max_instances=1)
 
     def _update_drown(self, dt: float):
         if not self.drowning:

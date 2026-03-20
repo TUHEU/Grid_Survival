@@ -97,10 +97,11 @@ class GameHUD:
         self.player_name = "Player"
         self.players_alive = 1
         self.total_players = 1
-        self.player_health = 0
-        self.player_max_health = 0
+
+        # Level state
         self.current_level = 1
         self.level_name = ""
+        self._level_flash_timer = 0.0   # non-zero = show level badge briefly
 
         # Score animation state
         self._score_anim_timer = 0.0
@@ -127,6 +128,10 @@ class GameHUD:
 
         # Timer urgency pulse
         self._pulse_timer += dt
+
+        # Level flash timer
+        if self._level_flash_timer > 0:
+            self._level_flash_timer = max(0.0, self._level_flash_timer - dt)
 
     def _start_score_anim(self):
         self._score_anim_phase = "up"
@@ -177,14 +182,39 @@ class GameHUD:
         """Draw HUD elements."""
         self._draw_score_panel(surface)
         self._draw_timer_panel(surface)
-        # Show level info
-        if self.level_name:
-            self._draw_level_panel(surface)
-        # Show health if player has health points
-        if self.player_max_health > 0:
-            self._draw_health_panel(surface)
         if self.total_players > 1:
             self._draw_alive_panel(surface)
+        self._draw_level_badge(surface)
+
+    def _draw_level_badge(self, surface: pygame.Surface):
+        """Level badge — bottom-left corner, fades out after level start."""
+        # Always visible but extra bright during flash period
+        if self._level_flash_timer > 0:
+            alpha = 255
+        else:
+            alpha = 140   # dimmer during normal play
+
+        level_str = f"LV {self.current_level}"
+        name_str = self.level_name[:12] if self.level_name else ""
+
+        badge_surf = self._font_label.render(level_str, True, (255, 215, 0))
+        name_surf  = self._font_label.render(name_str, True, (180, 190, 210))
+
+        pad = 10
+        bw = max(badge_surf.get_width(), name_surf.get_width()) + pad * 2
+        bh = badge_surf.get_height() + name_surf.get_height() + pad * 3
+        bx = 20
+        by = WINDOW_SIZE[1] - bh - 60  # above power HUD
+
+        panel = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        panel.fill((10, 10, 20, int(alpha * 0.7)))
+        pygame.draw.rect(panel, (255, 215, 0, alpha), panel.get_rect(), 1, border_radius=6)
+        surface.blit(panel, (bx, by))
+
+        badge_surf.set_alpha(alpha)
+        name_surf.set_alpha(alpha)
+        surface.blit(badge_surf, (bx + pad, by + pad))
+        surface.blit(name_surf, (bx + pad, by + pad + badge_surf.get_height() + 4))
 
     def _draw_score_panel(self, surface: pygame.Surface):
         """Score panel — top-left."""
@@ -294,60 +324,6 @@ class GameHUD:
         vy = ly + label_surf.get_height() + HUD_PANEL_PADDING_V
         surface.blit(value_surf, (vx, vy))
 
-    def _draw_level_panel(self, surface: pygame.Surface):
-        """Level panel — below timer on center."""
-        level_color = (100, 150, 255)  # Blue for level
-
-        label_surf = self._font_label.render("LEVEL", True, level_color)
-        value_str = f"{self.current_level}"
-        value_surf = self._font_value.render(value_str, True, HUD_VALUE_COLOR)
-
-        # Level name below
-        name_surf = _load_font(FONT_PATH_HUD, 14).render(self.level_name, True, (180, 180, 200))
-
-        panel_w = max(label_surf.get_width(), value_surf.get_width(), name_surf.get_width()) + HUD_PANEL_PADDING_H * 2
-        panel_h = label_surf.get_height() + value_surf.get_height() + name_surf.get_height() + HUD_PANEL_PADDING_V * 4
-        panel_rect = pygame.Rect(0, 80, panel_w, panel_h)
-        panel_rect.centerx = WINDOW_SIZE[0] // 2
-
-        _draw_panel(surface, panel_rect, HUD_PANEL_BG, level_color,
-                    HUD_PANEL_BORDER_WIDTH, HUD_PANEL_RADIUS, glow=True)
-
-        lx = panel_rect.centerx - label_surf.get_width() // 2
-        ly = panel_rect.top + HUD_PANEL_PADDING_V
-        surface.blit(label_surf, (lx, ly))
-
-        vx = panel_rect.centerx - value_surf.get_width() // 2
-        vy = ly + label_surf.get_height() + HUD_PANEL_PADDING_V
-        surface.blit(value_surf, (vx, vy))
-
-        nx = panel_rect.centerx - name_surf.get_width() // 2
-        ny = vy + value_surf.get_height() + HUD_PANEL_PADDING_V
-        surface.blit(name_surf, (nx, ny))
-
-    def _draw_health_panel(self, surface: pygame.Surface):
-        """Health panel — below score panel on left."""
-        health_color = (220, 50, 50)  # Red for health
-        
-        label_surf = self._font_label.render("HEALTH", True, health_color)
-        value_str = f"{self.player_health}/{self.player_max_health}"
-        value_surf = self._font_value.render(value_str, True, HUD_VALUE_COLOR)
-
-        panel_w = max(label_surf.get_width(), value_surf.get_width()) + HUD_PANEL_PADDING_H * 2
-        panel_h = label_surf.get_height() + value_surf.get_height() + HUD_PANEL_PADDING_V * 3
-        panel_rect = pygame.Rect(20, 100, panel_w, panel_h)
-
-        _draw_panel(surface, panel_rect, HUD_PANEL_BG, health_color,
-                    HUD_PANEL_BORDER_WIDTH, HUD_PANEL_RADIUS, glow=True)
-
-        lx = panel_rect.left + HUD_PANEL_PADDING_H
-        ly = panel_rect.top + HUD_PANEL_PADDING_V
-        surface.blit(label_surf, (lx, ly))
-
-        vx = panel_rect.left + HUD_PANEL_PADDING_H
-        vy = ly + label_surf.get_height() + HUD_PANEL_PADDING_V
-        surface.blit(value_surf, (vx, vy))
-
     def reset(self):
         """Reset HUD state."""
         self.survival_time = 0.0
@@ -357,20 +333,25 @@ class GameHUD:
         self._score_scale = 1.0
         self._score_flash = False
         self._pulse_timer = 0.0
-        self.player_health = 0
-        self.player_max_health = 0
-        self.current_level = 1
-        self.level_name = ""
+        self._level_flash_timer = 0.0
 
-    def set_player_info(self, name: str, alive: int, total: int, health: int = 0, max_health: int = 0, level: int = 1, level_name: str = ""):
+    def set_level(self, number: int, name: str):
+        """Update the displayed level and flash the badge briefly."""
+        self.current_level = number
+        self.level_name = name
+        self._level_flash_timer = 3.0   # show for 3 seconds
+
+    def add_score(self, points: int):
+        """Add bonus points directly (e.g. level-complete bonus)."""
+        if points > 0:
+            self.score += points
+            self._start_score_anim()
+
+    def set_player_info(self, name: str, alive: int, total: int):
         """Update player information."""
         self.player_name = name
         self.players_alive = alive
         self.total_players = total
-        self.player_health = health
-        self.player_max_health = max_health
-        self.current_level = level
-        self.level_name = level_name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -468,12 +449,10 @@ class EliminationScreen:
         name_surf.set_alpha(text_alpha)
         surface.blit(name_surf, name_surf.get_rect(center=(cx, panel_rect.top + 45)))
 
-        # Divider line — draw.line ignores alpha on non-SRCALPHA surfaces,
-        # so render the line on a temporary surface and blit with set_alpha.
+        # Divider line
         div_y = panel_rect.top + 75
-        div_surf = pygame.Surface((panel_rect.width - 40, 1), pygame.SRCALPHA)
-        div_surf.fill((255, 60, 60, text_alpha))
-        surface.blit(div_surf, (panel_rect.left + 20, div_y))
+        pygame.draw.line(surface, (255, 60, 60, text_alpha),
+                         (panel_rect.left + 20, div_y), (panel_rect.right - 20, div_y), 1)
 
         # Survived time
         minutes = int(self.survival_time // 60)

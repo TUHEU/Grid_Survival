@@ -870,3 +870,48 @@ def power_key_for_player(player_index: int) -> int:
     if 0 <= player_index < len(defaults):
         return defaults[player_index]
     return pygame.K_q
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-power helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_all_power_classes() -> list[type]:
+    """Return every concrete power class."""
+    return [CavemanPower, NinjaPower, WizardPower, KnightPower,
+            RobotPower, SamuraiPower, ArcherPower]
+
+
+def get_powers_for_character(character_name: str, count: int = 2) -> list[CharacterPower]:
+    """
+    Return *count* powers for a character.
+    The first is always the character-matched power; extras are chosen
+    from the remaining pool to give variety.
+    """
+    primary = get_power_for_character(character_name)
+    if count <= 1:
+        return [primary]
+
+    all_cls = get_all_power_classes()
+    primary_cls = type(primary)
+    extras_cls = [c for c in all_cls if c is not primary_cls]
+
+    import random as _rnd
+    chosen_extras = _rnd.sample(extras_cls, min(count - 1, len(extras_cls)))
+    result = [primary] + [cls() for cls in chosen_extras]
+    return result
+
+
+def get_ai_powers(level_number: int) -> list[CharacterPower]:
+    """
+    Return a list of powers for an AI at *level_number*.
+    Level 1: 1 power.  Level 3+: 2 powers.  Level 5+: 3 powers.
+    """
+    count = 1
+    if level_number >= 3:
+        count = 2
+    if level_number >= 5:
+        count = 3
+    all_cls = get_all_power_classes()
+    import random as _rnd
+    chosen = _rnd.sample(all_cls, min(count, len(all_cls)))
+    return [cls() for cls in chosen]

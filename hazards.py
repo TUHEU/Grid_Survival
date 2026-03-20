@@ -128,23 +128,26 @@ class MovingTrap:
 
 class HazardManager:
     """Manages all hazards in the game with difficulty scaling."""
-    
-    def __init__(self, collision_manager: Optional[CollisionManager] = None):
+
+    def __init__(self, collision_manager=None, level_config=None):
         self.bullets: List[Bullet] = []
         self.traps: List[MovingTrap] = []
         self.time_elapsed = 0.0
         self.bullet_spawn_timer = 0.0
         self.trap_spawn_timer = 0.0
-        
-        # Difficulty scaling
-        self.bullet_spawn_interval = 3.0  # seconds
-        self.trap_spawn_interval = 8.0  # seconds
-        self.min_bullet_interval = 1.0
-        self.min_trap_interval = 5.0
-        self.difficulty_scale_rate = 0.98
-        
-        # Hazard activation threshold
-        self.hazard_start_time = 15.0  # Start spawning after 15 seconds
+
+        # Pull values from HazardProfile if available
+        hp = level_config.hazard if level_config else None
+        self.bullet_spawn_interval  = hp.bullet_interval       if hp else 3.0
+        self.min_bullet_interval    = hp.bullet_min_interval   if hp else 1.0
+        self._bullet_speed          = hp.bullet_speed          if hp else 300.0
+        self.trap_spawn_interval    = hp.trap_interval         if hp else 8.0
+        self.min_trap_interval      = hp.trap_min_interval     if hp else 5.0
+        self._trap_speed            = hp.trap_speed            if hp else 150.0
+        self._max_traps             = hp.max_traps             if hp else 4
+        self.difficulty_scale_rate  = hp.difficulty_scale_rate if hp else 0.98
+        self.hazard_start_time      = hp.start_delay           if hp else 15.0
+
         self.collision_manager = collision_manager
         self._audio = get_audio()
     
@@ -178,7 +181,7 @@ class HazardManager:
         
         # Spawn new traps
         self.trap_spawn_timer += dt
-        if self.trap_spawn_timer >= self.trap_spawn_interval and len(self.traps) < 4:
+        if self.trap_spawn_timer >= self.trap_spawn_interval and len(self.traps) < self._max_traps:
             self.trap_spawn_timer = 0.0
             self._spawn_trap()
             # Increase difficulty
@@ -204,7 +207,7 @@ class HazardManager:
             pos = (WINDOW_SIZE[0] + 20, random.randint(50, WINDOW_SIZE[1] - 50))
             direction = pygame.Vector2(-1, random.uniform(-0.5, 0.5))
         
-        self.bullets.append(Bullet(pos, direction))
+        self.bullets.append(Bullet(pos, direction, speed=self._bullet_speed))
         self._audio.play_sfx(SOUND_BULLET_FIRE, volume=0.50,
                              volume_jitter=0.08, max_instances=4)
     
@@ -221,7 +224,7 @@ class HazardManager:
         end_x = max(margin, min(WINDOW_SIZE[0] - margin, start_x + offset_x))
         end_y = max(margin, min(WINDOW_SIZE[1] - margin, start_y + offset_y))
         
-        self.traps.append(MovingTrap((start_x, start_y), (end_x, end_y)))
+        self.traps.append(MovingTrap((start_x, start_y), (end_x, end_y), speed=self._trap_speed))
         self._audio.play_sfx(SOUND_TRAP_SPAWN, volume=0.60, max_instances=2)
     
     def draw(self, surface: pygame.Surface):

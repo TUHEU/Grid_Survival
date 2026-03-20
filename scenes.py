@@ -437,7 +437,7 @@ class PlayerCountScreen:
         self.font_title = _load_font(FONT_PATH_HEADING, 42, bold=True)
         self.font_card = _load_font(FONT_PATH_HEADING, 36, bold=True)
 
-        # Player count options (2-4 players)
+        # Player count options (2-4 players for local multiplayer)
         self.options = [2, 3, 4]
         self.card_width = 120
         self.card_height = 150
@@ -1220,3 +1220,370 @@ class PlayerSelectionScreen:
             else:
                 resolved.append(self.characters[idx])
         return resolved
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ArenaSelectionScreen
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ArenaSelectionScreen:
+    """
+    Let all players choose the arena shape before the game starts.
+    Works for both VS Computer and Local Multiplayer modes.
+    Returns the chosen ArenaShape enum value, or None if cancelled.
+    """
+
+    CARD_W = 160
+    CARD_H = 130
+    SPACING = 24
+    BG_COLOR = (10, 12, 22)
+
+    # Arena metadata: (shape, display_name, description, colour)
+    ARENAS = [
+        ("full",    "Full Grid",    "All tiles present\nOpen battlefield",    (60, 130, 200)),
+        ("l_shape", "L-Shape",      "Corner removed\nEdge pressure",           (200, 130, 50)),
+        ("cross",   "Cross",        "Plus-sign layout\nControl the center",    (180, 60,  60)),
+        ("ring",    "Ring",         "Hollow center void\nRing fights",          (160, 60, 200)),
+        ("bridges", "Bridges",      "3 narrow strips\nHigh-risk traversal",    (50,  180, 100)),
+        ("islands", "Islands",      "4 small clusters\nJump or fall",           (200, 80, 160)),
+    ]
+
+    def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock):
+        self.screen = screen
+        self.clock  = clock
+        self.W, self.H = WINDOW_SIZE
+        self.selected_idx = 0
+        self.done = False
+        self.cancelled = False
+
+        self.font_title = _load_font(FONT_PATH_HEADING, 30, bold=True)
+        self.font_body  = _load_font(FONT_PATH_BODY,    18)
+        self.font_small = _load_font(FONT_PATH_SMALL,   14)
+
+        self._card_rects: list[pygame.Rect] = []
+        self._time = 0.0
+
+    def run(self):
+        while not self.done:
+            dt = self.clock.tick(TARGET_FPS) / 1000.0
+            self._time += dt
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.cancelled = True
+                    self.done = True
+                elif event.type == pygame.KEYDOWN:
+                    self._handle_key(event.key)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self._handle_click(event.pos)
+            self._draw()
+            pygame.display.flip()
+
+        if self.cancelled:
+            return None
+        from level_config import ArenaShape
+        shape_val = self.ARENAS[self.selected_idx][0]
+        return ArenaShape(shape_val)
+
+    def _handle_key(self, key):
+        from settings import SOUND_UI_SELECT, SOUND_UI_CONFIRM, SOUND_UI_BACK
+        from audio import get_audio
+        audio = get_audio()
+        if key == pygame.K_ESCAPE:
+            audio.play_sfx_ui(SOUND_UI_BACK)
+            self.cancelled = True
+            self.done = True
+        elif key in (pygame.K_RETURN, pygame.K_SPACE):
+            audio.play_sfx_ui(SOUND_UI_CONFIRM)
+            self.done = True
+        elif key in (pygame.K_LEFT, pygame.K_a):
+            self.selected_idx = (self.selected_idx - 1) % len(self.ARENAS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self.selected_idx = (self.selected_idx + 1) % len(self.ARENAS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+
+    def _handle_click(self, pos):
+        from settings import SOUND_UI_SELECT, SOUND_UI_CONFIRM
+        from audio import get_audio
+        audio = get_audio()
+        for idx, rect in enumerate(self._card_rects):
+            if rect.collidepoint(pos):
+                if idx == self.selected_idx:
+                    audio.play_sfx_ui(SOUND_UI_CONFIRM)
+                    self.done = True
+                else:
+                    self.selected_idx = idx
+                    audio.play_sfx_ui(SOUND_UI_SELECT)
+                return
+
+    def _draw(self):
+        self.screen.fill(self.BG_COLOR)
+
+        # Title
+        title = self.font_title.render("CHOOSE YOUR ARENA", True, (255, 220, 80))
+        self.screen.blit(title, title.get_rect(center=(self.W // 2, 55)))
+
+        sub = self.font_body.render("Click a card or use ← → then Enter to confirm", True, (160, 160, 180))
+        self.screen.blit(sub, sub.get_rect(center=(self.W // 2, 90)))
+
+        # Cards
+        cols = 3
+        rows = math.ceil(len(self.ARENAS) / cols)
+        total_w = cols * self.CARD_W + (cols - 1) * self.SPACING
+        start_x = self.W // 2 - total_w // 2
+        start_y = 120
+
+        self._card_rects = []
+        for idx, (shape_val, name, desc, color) in enumerate(self.ARENAS):
+            col = idx % cols
+            row = idx // cols
+            x = start_x + col * (self.CARD_W + self.SPACING)
+            y = start_y + row * (self.CARD_H + self.SPACING)
+            rect = pygame.Rect(x, y, self.CARD_W, self.CARD_H)
+            self._card_rects.append(rect)
+            self._draw_card(rect, idx, shape_val, name, desc, color)
+
+        # Confirm button
+        btn_rect = pygame.Rect(0, 0, 240, 52)
+        btn_rect.centerx = self.W // 2
+        btn_rect.bottom  = self.H - 24
+        pygame.draw.rect(self.screen, (80, 160, 255), btn_rect, border_radius=14)
+        btn_lbl = self.font_body.render("Confirm Arena", True, (0, 0, 0))
+        self.screen.blit(btn_lbl, btn_lbl.get_rect(center=btn_rect.center))
+
+    def _draw_card(self, rect, idx, shape_val, name, desc, color):
+        selected = (idx == self.selected_idx)
+        hovered  = rect.collidepoint(pygame.mouse.get_pos())
+        border_col = (255, 220, 50) if selected else (
+            tuple(min(255, c + 40) for c in color) if hovered else color
+        )
+        bg_col = (40, 45, 65) if selected else (26, 30, 46)
+
+        pygame.draw.rect(self.screen, bg_col, rect, border_radius=14)
+        pygame.draw.rect(self.screen, border_col, rect, 3 if selected else 1, border_radius=14)
+
+        # Draw tiny arena shape preview
+        self._draw_arena_preview(rect, shape_val, color, selected)
+
+        # Name
+        nm = self.font_body.render(name, True, (240, 240, 245))
+        self.screen.blit(nm, nm.get_rect(center=(rect.centerx, rect.bottom - 44)))
+
+        # Description lines
+        for li, line in enumerate(desc.split("\n")[:2]):
+            ls = self.font_small.render(line, True, (160, 165, 185))
+            self.screen.blit(ls, ls.get_rect(center=(rect.centerx, rect.bottom - 26 + li * 14)))
+
+    def _draw_arena_preview(self, card_rect, shape_val, color, selected):
+        """Draw a tiny isometric preview of the arena shape inside the card."""
+        px = card_rect.left + 10
+        py = card_rect.top + 8
+        pw = card_rect.width - 20
+        ph = 52
+        preview_rect = pygame.Rect(px, py, pw, ph)
+
+        # Build a tiny grid representation
+        cols, rows = 6, 4
+        cell_w = pw // cols
+        cell_h = ph // rows
+
+        # Determine which cells are "active" for this shape (simplified)
+        active = set()
+        cx, cy = cols // 2, rows // 2
+        if shape_val == "full":
+            active = {(c, r) for c in range(cols) for r in range(rows)}
+        elif shape_val == "l_shape":
+            active = {(c, r) for c in range(cols) for r in range(rows)
+                      if not (c >= cx and r <= cy)}
+        elif shape_val == "cross":
+            active = {(c, r) for c in range(cols) for r in range(rows)
+                      if c == cx or r == cy}
+        elif shape_val == "ring":
+            active = {(c, r) for c in range(cols) for r in range(rows)
+                      if 1 <= abs(c - cx) + abs(r - cy) <= 3}
+        elif shape_val == "bridges":
+            active = {(c, r) for c in range(cols) for r in (1, 2)}
+        elif shape_val == "islands":
+            for ox, oy in [(1, 1), (4, 1), (1, 2), (4, 2)]:
+                for dc in range(-1, 2):
+                    for dr in range(-1, 2):
+                        nc, nr = ox + dc, oy + dr
+                        if 0 <= nc < cols and 0 <= nr < rows:
+                            active.add((nc, nr))
+
+        alpha = 255 if selected else 180
+        for c in range(cols):
+            for r in range(rows):
+                cell_rect = pygame.Rect(
+                    px + c * cell_w + 1, py + r * cell_h + 1,
+                    cell_w - 2, cell_h - 2
+                )
+                if (c, r) in active:
+                    s = pygame.Surface((cell_rect.width, cell_rect.height), pygame.SRCALPHA)
+                    s.fill((*color, alpha))
+                    self.screen.blit(s, cell_rect.topleft)
+                else:
+                    s = pygame.Surface((cell_rect.width, cell_rect.height), pygame.SRCALPHA)
+                    s.fill((20, 20, 30, 120))
+                    self.screen.blit(s, cell_rect.topleft)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Level Selection Screen
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LevelSelectionScreen:
+    """
+    Let all players choose the level before the game starts.
+    Works for both VS Computer and Local Multiplayer modes.
+    Returns the chosen level number (1-6), or None if cancelled.
+    """
+
+    CARD_W = 140
+    CARD_H = 110
+    SPACING = 20
+    BG_COLOR = (10, 12, 22)
+
+    # Level metadata: (level_number, display_name, description, colour)
+    LEVELS = [
+        (1, "Meadow",    "Easy - Full grid\nLearn the basics",    (60, 160, 80)),
+        (2, "Cliffs",    "Medium - L-shape\nEdge strategy",       (160, 130, 60)),
+        (3, "Ruins",     "Hard - Cross\nControl the center",    (140, 60, 120)),
+        (4, "Volcano",   "Very Hard - Ring\nLava danger",        (180, 60, 40)),
+        (5, "Abyss",      "Extreme - Bridges\nNarrow paths",       (40, 100, 180)),
+        (6, "Void",      "Nightmare - Islands\nUltimate challenge",(120, 40, 140)),
+    ]
+
+    def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock):
+        self.screen = screen
+        self.clock  = clock
+        self.W, self.H = WINDOW_SIZE
+        self.selected_idx = 0
+        self.done = False
+        self.cancelled = False
+
+        self.font_title = _load_font(FONT_PATH_HEADING, 28, bold=True)
+        self.font_body  = _load_font(FONT_PATH_BODY,    16)
+        self.font_small = _load_font(FONT_PATH_SMALL,   12)
+
+        self._card_rects: list[pygame.Rect] = []
+        self._time = 0.0
+
+    def run(self):
+        while not self.done:
+            dt = self.clock.tick(TARGET_FPS) / 1000.0
+            self._time += dt
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.cancelled = True
+                    self.done = True
+                elif event.type == pygame.KEYDOWN:
+                    self._handle_key(event.key)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    self._handle_click(event.pos)
+            self._draw()
+            pygame.display.flip()
+
+        if self.cancelled:
+            return None
+        return self.LEVELS[self.selected_idx][0]
+
+    def _handle_key(self, key):
+        from settings import SOUND_UI_SELECT, SOUND_UI_CONFIRM, SOUND_UI_BACK
+        from audio import get_audio
+        audio = get_audio()
+        if key == pygame.K_ESCAPE:
+            audio.play_sfx_ui(SOUND_UI_BACK)
+            self.cancelled = True
+            self.done = True
+        elif key in (pygame.K_RETURN, pygame.K_SPACE):
+            audio.play_sfx_ui(SOUND_UI_CONFIRM)
+            self.done = True
+        elif key in (pygame.K_LEFT, pygame.K_a):
+            self.selected_idx = (self.selected_idx - 1) % len(self.LEVELS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self.selected_idx = (self.selected_idx + 1) % len(self.LEVELS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+        elif key in (pygame.K_UP, pygame.K_w):
+            self.selected_idx = (self.selected_idx - 3) % len(self.LEVELS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.selected_idx = (self.selected_idx + 3) % len(self.LEVELS)
+            audio.play_sfx_ui(SOUND_UI_SELECT)
+
+    def _handle_click(self, pos):
+        from settings import SOUND_UI_SELECT, SOUND_UI_CONFIRM
+        from audio import get_audio
+        audio = get_audio()
+        for idx, rect in enumerate(self._card_rects):
+            if rect.collidepoint(pos):
+                if idx == self.selected_idx:
+                    audio.play_sfx_ui(SOUND_UI_CONFIRM)
+                    self.done = True
+                else:
+                    self.selected_idx = idx
+                    audio.play_sfx_ui(SOUND_UI_SELECT)
+                return
+
+    def _draw(self):
+        self.screen.fill(self.BG_COLOR)
+
+        # Title
+        title = self.font_title.render("CHOOSE YOUR LEVEL", True, (255, 220, 80))
+        self.screen.blit(title, title.get_rect(center=(self.W // 2, 45)))
+
+        sub = self.font_body.render("Select difficulty level", True, (160, 160, 180))
+        self.screen.blit(sub, sub.get_rect(center=(self.W // 2, 80)))
+
+        # Cards - 3x2 grid
+        cols = 3
+        rows = 2
+        total_w = cols * self.CARD_W + (cols - 1) * self.SPACING
+        total_h = rows * self.CARD_H + (rows - 1) * self.SPACING
+        start_x = self.W // 2 - total_w // 2
+        start_y = 110
+
+        self._card_rects = []
+        for idx, (level_num, name, desc, color) in enumerate(self.LEVELS):
+            col = idx % cols
+            row = idx // cols
+            x = start_x + col * (self.CARD_W + self.SPACING)
+            y = start_y + row * (self.CARD_H + self.SPACING)
+            rect = pygame.Rect(x, y, self.CARD_W, self.CARD_H)
+            self._card_rects.append(rect)
+            self._draw_card(rect, idx, level_num, name, desc, color)
+
+        # Confirm button
+        btn_rect = pygame.Rect(0, 0, 200, 48)
+        btn_rect.centerx = self.W // 2
+        btn_rect.bottom  = self.H - 20
+        pygame.draw.rect(self.screen, (80, 160, 255), btn_rect, border_radius=12)
+        btn_lbl = self.font_body.render("Confirm Level", True, (0, 0, 0))
+        self.screen.blit(btn_lbl, btn_lbl.get_rect(center=btn_rect.center))
+
+    def _draw_card(self, rect, idx, level_num, name, desc, color):
+        selected = (idx == self.selected_idx)
+        hovered  = rect.collidepoint(pygame.mouse.get_pos())
+        border_col = (255, 220, 50) if selected else (
+            tuple(min(255, c + 40) for c in color) if hovered else color
+        )
+        bg_col = (40, 45, 65) if selected else (26, 30, 46)
+
+        pygame.draw.rect(self.screen, bg_col, rect, border_radius=12)
+        pygame.draw.rect(self.screen, border_col, rect, 3 if selected else 1, border_radius=12)
+
+        # Level number circle
+        cx, cy = rect.centerx, rect.top + 28
+        r = 18
+        pygame.draw.circle(self.screen, color, (cx, cy), r)
+        lvl = self.font_body.render(str(level_num), True, (255, 255, 255))
+        self.screen.blit(lvl, lvl.get_rect(center=(cx, cy)))
+
+        # Name
+        nm = self.font_body.render(name, True, (240, 240, 245))
+        self.screen.blit(nm, nm.get_rect(center=(rect.centerx, rect.bottom - 32)))
+
+        # Description
+        for li, line in enumerate(desc.split("\n")[:2]):
+            ls = self.font_small.render(line, True, (150, 155, 175))
+            self.screen.blit(ls, ls.get_rect(center=(rect.centerx, rect.bottom - 16 + li * 12)))
