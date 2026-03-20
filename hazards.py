@@ -4,9 +4,11 @@ Implements bullets and moving traps that threaten players.
 """
 
 import random
+import math
 import pygame
 from typing import List, Tuple, Optional
 
+from audio import get_audio
 from collision_manager import CollisionManager
 from settings import WINDOW_SIZE
 
@@ -120,12 +122,94 @@ class MovingTrap:
         return self.get_rect().colliderect(player_rect)
 
 
+class Explosion:
+    """Particle explosion effect with punchy visuals."""
+    
+    def __init__(self, position: Tuple[float, float], color: Tuple[int, int, int] = (255, 100, 50)):
+        self.particles: List[dict] = []
+        self.position = pygame.Vector2(position)
+        self.ring_radius = 5.0
+        self.ring_alpha = 255.0
+        self.active = True
+        
+        colors = [
+            (255, 50, 50),   # Red
+            (255, 140, 0),   # Orange
+            (255, 255, 100), # Yellow
+            (100, 100, 100)  # Smoke Grey
+        ]
+        
+        for _ in range(40):
+            angle = random.uniform(0, 360) 
+            speed = random.uniform(150, 450)  # Much faster initial burst
+            rad = math.radians(angle)
+            velocity = pygame.Vector2(math.cos(rad), math.sin(rad)) * speed
+            
+            self.particles.append({
+                'pos': pygame.Vector2(position),
+                'vel': velocity,
+                'radius': random.uniform(4, 10),
+                'life': 1.0,
+                'max_life': 1.0,
+                'decay': random.uniform(1.5, 4.0),
+                'color': random.choice(colors),
+                'drag': random.uniform(0.01, 0.1)  # Very strong drag
+            })
+
+    def update(self, dt: float) -> bool:
+        """Update particles. Returns True if explosion is still active."""
+        particle_active = False
+        
+        # Expand ring faster
+        if self.ring_alpha > 0:
+            self.ring_radius += 600 * dt
+            self.ring_alpha -= 900 * dt
+            if self.ring_alpha < 0:
+                self.ring_alpha = 0
+            
+        for p in self.particles:
+            p['life'] -= dt * p['decay']
+            if p['life'] > 0:
+                # Strong drag effect: slow down rapidly
+                p['vel'] *= math.pow(p['drag'], dt)
+                p['pos'] += p['vel'] * dt
+                particle_active = True
+        
+        return particle_active or self.ring_alpha > 0
+
+    def draw(self, surface: pygame.Surface):
+        # Draw expanding ring (shockwave)
+        if self.ring_alpha > 0:
+             # Draw a white circle with alpha
+            pygame.draw.circle(surface, (255, 255, 255), (int(self.position.x), int(self.position.y)), int(self.ring_radius), 3)
+
+        # Draw particles
+        for p in self.particles:
+            if p['life'] > 0:
+                # Fade out size and alpha
+                life_ratio = p['life'] / p['max_life']
+                radius = int(p['radius'] * life_ratio)
+                if radius > 1:
+                    pygame.draw.circle(surface, p['color'], (int(p['pos'].x), int(p['pos'].y)), radius)
+            surf = pygame.Surface((int(self.ring_radius * 2) + 2, int(self.ring_radius * 2) + 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (255, 255, 255, int(self.ring_alpha)), 
+                             (int(self.ring_radius), int(self.ring_radius)), int(self.ring_radius), 2)
+            surface.blit(surf, (self.position.x - self.ring_radius, self.position.y - self.ring_radius))
+
+        for p in self.particles:
+            if p['life'] > 0:
+                radius = int(p['radius'] * p['life'])
+                if radius > 0:
+                    pygame.draw.circle(surface, p['color'], (int(p['pos'].x), int(p['pos'].y)), radius)
+
+
 class HazardManager:
     """Manages all hazards in the game with difficulty scaling."""
     
     def __init__(self, collision_manager: Optional[CollisionManager] = None):
         self.bullets: List[Bullet] = []
         self.traps: List[MovingTrap] = []
+        self.explosions: List[Explosion] = []
         self.time_elapsed = 0.0
         self.bullet_spawn_timer = 0.0
         self.trap_spawn_timer = 0.0
@@ -140,6 +224,12 @@ class HazardManager:
         # Hazard activation threshold
         self.hazard_start_time = 15.0  # Start spawning after 15 seconds
         self.collision_manager = collision_manager
+
+        # Preload explosion sound
+        try:
+            get_audio().preload_sfx("explosions.mp3")
+        except Exception as e:
+            print(f"Warning: Could not preload explosion sound: {e}")
     
     def update(self, dt: float):
         """Update all hazards and spawn new ones."""
@@ -157,6 +247,9 @@ class HazardManager:
         
         for trap in self.traps:
             trap.update(dt)
+
+        # Update explosions
+        self.explosions = [e for e in self.explosions if e.update(dt)]
         
         # Spawn new bullets
         self.bullet_spawn_timer += dt
@@ -220,28 +313,41 @@ class HazardManager:
             bullet.draw(surface)
         for trap in self.traps:
             trap.draw(surface)
+        for explosion in self.explosions:
+            explosion.draw(surface)
     
     def check_player_collision(self, player) -> bool:
         """Check if any hazard hits the player."""
+        hit = False
+        
         for bullet in self.bullets:
+            bullet_hit = False
             if self.collision_manager:
                 if self.collision_manager.bullet_hits_player(bullet, player):
-                    return True
+                    bullet_hit = True
             else:
                 if bullet.check_collision(player.rect):
-                    bullet.active = False
-                    return True
+                    bullet_hit = True
+            
+            if bullet_hit:
+                bullet.active = False
+                self.explosions.append(Explosion((bullet.position.x, bullet.position.y), bullet.color))
+                get_audio().play_sfx("explosions.mp3")
+                hit = True
         
         for trap in self.traps:
             if trap.check_collision(player.rect):
-                return True
+                self.explosions.append(Explosion((trap.position.x, trap.position.y), trap.color))
+                get_audio().play_sfx("explosions.mp3")
+                hit = True
         
-        return False
+        return hit
     
     def reset(self):
         """Reset all hazards."""
         self.bullets.clear()
         self.traps.clear()
+        self.explosions.clear()
         self.time_elapsed = 0.0
         self.bullet_spawn_timer = 0.0
         self.trap_spawn_timer = 0.0
