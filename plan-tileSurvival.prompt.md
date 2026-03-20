@@ -61,6 +61,12 @@ Foundation phase complete, with major UI/UX polish implemented:
    - Centered panel card layout with stats
    - Blinking restart prompt after fade-in
 
+5. **Physics & Effects Overhaul (Category 4)**
+   - **2.5D Jumping**: Implemented Z-axis physics where players jump *up* visually while a shadow remains on the ground.
+   - **Explosions**: Added shockwave rings and particle physics (drag, fading) for impactful hazard collisions.
+   - **Audio Controls**: Mute button added to in-game HUD.
+   - **Color Unification**: All UI/Game colors derived from a central `COLOR_PALETTE`.
+
 **Recent Architectural Shifts:**
 - Pivot from a strict 2D array tile grid to pixel-precise `walkable_mask` collisions based on TMX layers.
 - Resolved large merge conflicts by retaining the remote animated water and TMX rendering pipeline.
