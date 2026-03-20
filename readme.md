@@ -43,6 +43,13 @@ Grid Survival is a small isometric survival vignette built with Pygame. Guide a 
   **Drop shadow**: 3px offset shadow behind title text.
   **Blinking prompt**: Restart instructions blink after screen fully fades in.
 
+### Game Feel & Polish (Late March)
+  **Physics Overhaul**: Implemented true 2.5D Z-axis physics for jumping. Players now hop vertically *up* (z-axis) instead of sliding "north" (y-axis), complete with dynamic ground shadows and air control.
+  **Weighty Controls**: Tuned gravity (2000) and jump velocity (650) for a responsive, snappy platformer feel.
+  **Centralized Theme**: Unified `COLOR_PALETTE` in `settings.py`, synchronizing colors across HUD, Menus, and Backgrounds.
+  **Audio Control**: Added a clickable Mute button to the HUD. Audio system now toggles music/SFX instantly.
+  **Visual FX**: Revised explosions with expanding shockwave rings, randomized particle colors, and drag physics for realistic dissipation.
+
 ---
 
 ## Controls
