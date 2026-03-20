@@ -52,7 +52,8 @@ class Player:
         
         # Jump mechanics
         self.jumping = False
-        self.jump_velocity = 0.0
+        self.z = 0.0          # Height off the ground (Z-axis)
+        self.z_velocity = 0.0 # Vertical velocity (Z-axis)
         self.on_ground = True
         
         # Control scheme (for multiplayer)
@@ -142,8 +143,9 @@ class Player:
 
         # Handle jumping
         if self.jumping:
-            self._update_jump(dt, move_vector, walkable_mask)
+            self._update_jump(dt, move_vector, walkable_mask, walkable_bounds)
             self.current_animation.update(dt)
+            # Center represents ground contact point
             self.rect.center = (round(self.position.x), round(self.position.y))
             return
 
@@ -153,7 +155,7 @@ class Player:
         # Initiate jump
         if jump_pressed and self.on_ground:
             self.jumping = True
-            self.jump_velocity = PLAYER_JUMP_VELOCITY
+            self.z_velocity = PLAYER_JUMP_VELOCITY
             self.on_ground = False
 
         desired_facing = (
@@ -233,14 +235,31 @@ class Player:
         self._collision_outline = self._collision_mask.outline()
 
     def draw(self, surface: pygame.Surface):
-        surface.blit(self.current_animation.image, self.rect.topleft)
+        # Draw Shadow at ground position
+        if self.jumping and self.z > 0:
+            shadow_rect = pygame.Rect(0, 0, self.rect.width * 0.6, self.rect.height * 0.2)
+            shadow_rect.center = (self.rect.centerx, self.rect.bottom - 5)
+            # Scale shadow relative to height
+            scale = max(0.5, 1.0 - (self.z / 300))
+            shadow_w = int(shadow_rect.width * scale)
+            shadow_h = int(shadow_rect.height * scale)
+            shadow_s = pygame.Surface((shadow_w, shadow_h), pygame.SRCALPHA)
+            pygame.draw.ellipse(shadow_s, (0, 0, 0, 100), shadow_s.get_rect())
+            surface.blit(shadow_s, (shadow_rect.centerx - shadow_w//2, shadow_rect.centery - shadow_h//2))
+
+        # Apply Z-offset to draw position
+        draw_rect = self.rect.copy()
+        draw_rect.y -= round(self.z)
+        surface.blit(self.current_animation.image, draw_rect.topleft)
+
         if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_FOOTBOX:
             feet_rect = self._feet_rect(self.position)
+            # Feet rect tracks the ground position
             pygame.draw.rect(surface, DEBUG_PLAYER_FOOTBOX_COLOR, feet_rect, 1)
         if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_COLLISION:
             self._refresh_collision_shape()
             if len(self._collision_outline) >= 2:
-                offset_x, offset_y = self.rect.topleft
+                offset_x, offset_y = draw_rect.topleft # Draw collision shape at JUMP height too? Generally yes for visual clarity
                 outline_points = [
                     (offset_x + point[0], offset_y + point[1])
                     for point in self._collision_outline
@@ -268,7 +287,8 @@ class Player:
         self.drown_animation_done = False
         self.drown_surface_y = None
         self.jumping = False
-        self.jump_velocity = 0.0
+        self.z = 0.0
+        self.z_velocity = 0.0
         self.on_ground = True
         self._refresh_collision_shape(force=True)
 
@@ -311,37 +331,60 @@ class Player:
         if self.position.y - self.rect.height / 2 > WINDOW_SIZE[1]:
             self.position.y = min(self.position.y, bottom_limit)
     
-    def _update_jump(self, dt: float, move_vector: pygame.Vector2, walkable_mask):
-        """Update jump physics and horizontal movement during jump."""
-        # Apply gravity to jump velocity
-        self.jump_velocity = min(
-            self.jump_velocity + PLAYER_JUMP_GRAVITY * dt, PLAYER_MAX_FALL_SPEED
-        )
-        
-        # Update vertical position
-        self.position.y += self.jump_velocity * dt
-        self.velocity.y = self.jump_velocity
-        
-        # Allow horizontal movement during jump
+    def _update_jump(self, dt: float, move_vector: pygame.Vector2, walkable_mask, walkable_bounds):
+        """
+        Update jump physics (Z-axis) and allow air control (X/Y axis).
+        Moves the ground position independent of height.
+        """
+        # 1. Apply Gravity to Z-Velocity
+        self.z_velocity -= PLAYER_JUMP_GRAVITY * dt
+        self.z_velocity = max(-PLAYER_MAX_FALL_SPEED, self.z_velocity)
+
+        # 2. Update Z-Position
+        self.z += self.z_velocity * dt
+
+        # 3. Handle Horizontal Movement (Air Control)
         if move_vector.length_squared() > 0:
             move_vector = move_vector.normalize()
-            horizontal_displacement = pygame.Vector2(move_vector.x * self.speed * dt, 0)
-            proposed_x = self.position + horizontal_displacement
-            if self._is_over_platform(proposed_x, walkable_mask):
-                self.position.x = proposed_x.x
-        
-        # Check if landed on platform
-        if self.jump_velocity > 0:  # Falling down
-            if self._is_over_platform(self.position, walkable_mask):
-                self.jumping = False
-                self.jump_velocity = 0.0
-                self.on_ground = True
-        
-        # Check if fell off platform
-        if not self._is_over_platform(self.position, walkable_mask) and self.jump_velocity > 0:
+            displacement = move_vector * self.speed * dt
+            
+            # Update facing direction visually
+            self.facing = self._determine_facing(move_vector)
+            self._set_state("run", self.facing) # Or custom 'jump' anim state if available
+            
+            # Apply movement to ground position
+            # We don't check for 'over platform' here strictly, 
+            # allowing jumping over gaps. But check bounds if available.
+            proposed_pos = self.position + displacement
+            
+            # Optional: constrain to world bounds so we don't jump off screen 
+            if walkable_bounds:
+                # Basic clamping to bounds
+                if walkable_bounds.collidepoint(proposed_pos.x, proposed_pos.y):
+                    self.position = proposed_pos
+                else:
+                    # Allow movement if it brings us closer to bounds or slides along
+                    pass # Simplified: Just accept move for now or implement clamp
+                    self.position = proposed_pos 
+            else:
+                 self.position = proposed_pos
+
+        else:
+             self._set_state("idle", self.facing)
+
+        # 4. Check Landing
+        if self.z <= 0:
+            self.z = 0.0
+            self.z_velocity = 0.0
             self.jumping = False
-            self.falling = True
-            self.fall_velocity = self.jump_velocity
+            
+            # Check if we landed on solid ground or a pit
+            if self._is_over_platform(self.position, walkable_mask):
+                self.on_ground = True
+            else:
+                # Landed in a pit -> start falling
+                self.on_ground = False
+                self._start_fall(walkable_bounds)
 
     def draws_behind_map(self) -> bool:
         return (self.falling or self.drowning) and self.fall_draw_behind
