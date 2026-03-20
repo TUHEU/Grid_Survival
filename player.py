@@ -117,10 +117,34 @@ class Player:
             return "right"
         return self.facing
 
+    def die(self):
+        """Trigger death state. Stop movement and stay."""
+        if self.state == "death":
+            return
+        self.state = "death"
+        self.falling = False
+        self.drowning = False
+        self.jumping = False
+        self.velocity.update(0, 0)
+        self.current_animation = self.animations["death"][self.facing]
+        self.current_animation.reset()
+
+    def _update_death(self, dt: float):
+        """Update death animation."""
+        if not self.current_animation.finished:
+            self.current_animation.update(dt)
+
+    def get_hitbox(self) -> pygame.Rect:
+        """Get a tighter hitbox for hazard collision."""
+        # Shrink the rect horizontally and vertically to avoid cheap hits
+        shrink_x = -int(self.rect.width * 0.4)
+        shrink_y = -int(self.rect.height * 0.4)
+        return self.rect.inflate(shrink_x, shrink_y)
+
     def update(self, dt: float, keys, walkable_mask, walkable_bounds):
         move_vector = self._input_vector(keys)
-        jump_pressed = self._check_jump_input(keys)
-        self._update_with_move_vector(dt, move_vector, walkable_mask, walkable_bounds, jump_pressed)
+        # ... (rest is handled inside _update_with_move_vector)
+        self._update_with_move_vector(dt, move_vector, walkable_mask, walkable_bounds, self._check_jump_input(keys))
 
     def _update_with_move_vector(
         self,
@@ -130,6 +154,10 @@ class Player:
         walkable_bounds,
         jump_pressed: bool = False,
     ):
+        if self.state == "death":
+            self._update_death(dt)
+            return
+
         if self.falling:
             self._update_fall(dt)
             self.current_animation.update(dt)
