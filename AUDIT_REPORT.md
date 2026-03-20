@@ -23,6 +23,18 @@ This report documents a comprehensive audit of the Grid Survival codebase agains
 
 ---
 
+## CRITICAL FIXES (March 20, 2026)
+
+### 🐛 Bug Fixes & Adjustments
+
+| Issue | Status | Fix Implementation | Notes |
+|-------|--------|-------------------|-------|
+| **Player Freezes on Death** | ✅ Fixed | [`game.py`](game.py), [`player.py`](player.py) | Game loop now continues updating players in `death` state until animation finishes. Added explicit `die()` method. |
+| **Invisible Explosions** | ✅ Fixed | [`hazards.py`](hazards.py) | Fixed `Explosion.draw` logic to correctly render shockwaves and particles without performance degradation. |
+| **Unfair Hitboxes** | ✅ Fixed | [`player.py`](player.py) | Implemented `get_hitbox()` to shrink collision rect by 40%, matching visual sprite size. |
+| **Hazard Collision Logic** | ✅ Updated | [`hazards.py`](hazards.py) | Hazards now query `player.get_hitbox()` for precise collision detection. |
+
+
 ## WEEK 1: CORE PROTOTYPE
 
 ### ✅ Already Working (Verified)
