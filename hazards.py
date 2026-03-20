@@ -51,11 +51,13 @@ class Bullet:
             self.radius * 2
         )
     
-    def check_collision(self, player_rect: pygame.Rect) -> bool:
+    def check_collision(self, player) -> bool:
         """Check if bullet hits player."""
         if not self.active:
             return False
-        return self.get_rect().colliderect(player_rect)
+        # Use player's tighter hitbox if available
+        hitbox = player.get_hitbox() if hasattr(player, 'get_hitbox') else player.rect
+        return self.get_rect().colliderect(hitbox)
 
 
 class MovingTrap:
@@ -115,11 +117,13 @@ class MovingTrap:
             self.size
         )
     
-    def check_collision(self, player_rect: pygame.Rect) -> bool:
+    def check_collision(self, player) -> bool:
         """Check if trap hits player."""
         if not self.active:
             return False
-        return self.get_rect().colliderect(player_rect)
+        # Use player's tighter hitbox if available
+        hitbox = player.get_hitbox() if hasattr(player, 'get_hitbox') else player.rect
+        return self.get_rect().colliderect(hitbox)
 
 
 class Explosion:
@@ -181,7 +185,10 @@ class Explosion:
         # Draw expanding ring (shockwave)
         if self.ring_alpha > 0:
              # Draw a white circle with alpha
-            pygame.draw.circle(surface, (255, 255, 255), (int(self.position.x), int(self.position.y)), int(self.ring_radius), 3)
+            surf = pygame.Surface((int(self.ring_radius * 2) + 2, int(self.ring_radius * 2) + 2), pygame.SRCALPHA)
+            pygame.draw.circle(surf, (255, 255, 255, int(self.ring_alpha)), 
+                             (int(self.ring_radius), int(self.ring_radius)), int(self.ring_radius), 3)
+            surface.blit(surf, (self.position.x - self.ring_radius, self.position.y - self.ring_radius))
 
         # Draw particles
         for p in self.particles:
@@ -190,16 +197,6 @@ class Explosion:
                 life_ratio = p['life'] / p['max_life']
                 radius = int(p['radius'] * life_ratio)
                 if radius > 1:
-                    pygame.draw.circle(surface, p['color'], (int(p['pos'].x), int(p['pos'].y)), radius)
-            surf = pygame.Surface((int(self.ring_radius * 2) + 2, int(self.ring_radius * 2) + 2), pygame.SRCALPHA)
-            pygame.draw.circle(surf, (255, 255, 255, int(self.ring_alpha)), 
-                             (int(self.ring_radius), int(self.ring_radius)), int(self.ring_radius), 2)
-            surface.blit(surf, (self.position.x - self.ring_radius, self.position.y - self.ring_radius))
-
-        for p in self.particles:
-            if p['life'] > 0:
-                radius = int(p['radius'] * p['life'])
-                if radius > 0:
                     pygame.draw.circle(surface, p['color'], (int(p['pos'].x), int(p['pos'].y)), radius)
 
 
@@ -326,7 +323,7 @@ class HazardManager:
                 if self.collision_manager.bullet_hits_player(bullet, player):
                     bullet_hit = True
             else:
-                if bullet.check_collision(player.rect):
+                if bullet.check_collision(player):
                     bullet_hit = True
             
             if bullet_hit:
@@ -336,7 +333,7 @@ class HazardManager:
                 hit = True
         
         for trap in self.traps:
-            if trap.check_collision(player.rect):
+            if trap.check_collision(player):
                 self.explosions.append(Explosion((trap.position.x, trap.position.y), trap.color))
                 get_audio().play_sfx("explosions.mp3")
                 hit = True
