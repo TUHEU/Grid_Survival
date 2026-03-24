@@ -47,9 +47,7 @@ class GameManager:
         self.player_name = player_name
         self.game_mode = game_mode
         self.selected_characters = selected_characters or []
-        slot_count = self._player_slot_count()
-        spawn_positions = iter(self._initial_spawns(slot_count))
-
+        
         # Load assets
         self.background_surface = load_background_surface(WINDOW_SIZE)
         (
@@ -61,6 +59,11 @@ class GameManager:
             self.map_scale_y,
             self.map_offset,
         ) = load_tilemap_surface(WINDOW_SIZE)
+        
+        # Calculate spawn points after map loads
+        slot_count = self._player_slot_count()
+        spawn_positions = iter(self._initial_spawns(slot_count))
+        
         self.walkable_debug_surface = None
         self.original_walkable_mask = self.walkable_mask.copy() if self.walkable_mask else None
 
@@ -485,6 +488,72 @@ class GameManager:
             )
 
         self.screen.blit(self.walkable_debug_surface, (0, 0))
+
+    def _initial_spawns(self, slot_count: int) -> list[tuple[int, int]]:
+        # Hardcoded grid positions on the platform (10x6 platform at x=7, y=9)
+        # Platform center is approx (12, 12)
+        grid_spots = [
+            (11, 12), # P1
+            (14, 12), # P2
+            (12, 11), # P3
+            (12, 13), # P4
+        ]
+        
+        spawns = []
+        for i in range(slot_count):
+            if i < len(grid_spots):
+                gx, gy = grid_spots[i]
+                pos = self._grid_to_screen(gx, gy)
+            else:
+                 # Fallback to center
+                 pos = self._grid_to_screen(12, 12)
+            spawns.append(pos)
+        return spawns
+
+    def _grid_to_screen(self, gx: int, gy: int) -> tuple[int, int]:
+        """Convert grid coordinates to screen pixel coordinates."""
+        if not self.tmx_data:
+            return PLAYER_START_POS
+            
+        half_width = self.tmx_data.tilewidth / 2
+        half_height = self.tmx_data.tileheight / 2
+        
+        # Iso projection logic (matching TMX rendering)
+        # origin_x is likely map_height * half_width based on standard staggered
+        origin_x = self.tmx_data.height * half_width
+        
+        # Calculate pixel from grid
+        pixel_x = (gx - gy) * half_width + origin_x
+        pixel_y = (gx + gy) * half_height
+        
+        # Adjust to center of tile surface (top-center of diamond)
+        # Tiled places image top-left at pixel_x, pixel_y usually
+        # Actually Tiled staggered iso uses center-bottom alignment for objects?
+        # But for tiles, it draws tile image at calculated pos.
+        # Let's target the center of the diamond.
+        center_x = pixel_x + half_width
+        center_y = pixel_y + half_height
+        
+        # Apply global map scale and offset
+        # Offset is (window_w - scaled_w)//2, (window_h - scaled_h)//2
+        off_x, off_y = (0, 0)
+        if self.map_offset:
+            off_x, off_y = self.map_offset
+            
+        screen_x = center_x * self.map_scale_x + off_x
+        screen_y = center_y * self.map_scale_y + off_y
+        
+        # Adjust Y slightly up because "standing on top"
+        # Since tiles have height (like 128px image vs 64px grid height),
+        # the surface is usually visually higher.
+        # But our current tiles are just flat diamonds mostly?
+        # The tileset tilesfloorbig uses 128x128 images but tileheight 64.
+        # This implies a lot of vertical space. 
+        # Typically the "visual top" is higher up.
+        # Let's shift Y up by say 32 pixels to be safe.
+        screen_y -= 16
+
+        return (int(screen_x), int(screen_y))
 
     def _player_slot_count(self) -> int:
         if self.game_mode == MODE_LOCAL_MULTIPLAYER:
