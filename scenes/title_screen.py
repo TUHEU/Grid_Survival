@@ -15,6 +15,7 @@ from settings import (
     SCENE_OVERLAY_COLOR,
     TITLE_TEXT,
     TITLE_BG_COLOR,
+    TITLE_BG_IMAGE_PATH,
     TITLE_COLORS,
     TITLE_DROP_DURATION,
     TITLE_PULSE_SPEED,
@@ -99,6 +100,25 @@ class TitleScreen:
 
         self._start_music()
 
+        # Load background
+        self._bg_image = None
+        if TITLE_BG_IMAGE_PATH.exists():
+            try:
+                raw_bg = pygame.image.load(str(TITLE_BG_IMAGE_PATH)).convert()
+                # Scale to fill (cover)
+                img_w, img_h = raw_bg.get_size()
+                scale_w = self.width / img_w
+                scale_h = self.height / img_h
+                scale = max(scale_w, scale_h)
+                new_w, new_h = int(img_w * scale), int(img_h * scale)
+                scaled_bg = pygame.transform.smoothscale(raw_bg, (new_w, new_h))
+                # Center crop
+                crop_x = (new_w - self.width) // 2
+                crop_y = (new_h - self.height) // 2
+                self._bg_image = scaled_bg.subsurface((crop_x, crop_y, self.width, self.height))
+            except Exception as e:
+                print(f"Failed to load title bg: {e}")
+
     # ── music ────────────────────────────────────────────────────────────
 
     def _start_music(self) -> None:
@@ -156,7 +176,15 @@ class TitleScreen:
     # ── drawing ──────────────────────────────────────────────────────────
 
     def _draw_background(self) -> None:
-        self.screen.fill(TITLE_BG_COLOR)
+        if self._bg_image:
+            self.screen.blit(self._bg_image, (0, 0))
+            # Overlay
+            overlay = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 115))  # rgba(0, 0, 0, 0.45) -> 255 * 0.45 = 114.75
+            self.screen.blit(overlay, (0, 0))
+        else:
+            self.screen.fill(TITLE_BG_COLOR)
+            
         for p in self._particles:
             alpha = int(80 + 60 * math.sin(self._title_time * 4 + p["phase"]))
             color = (
