@@ -310,6 +310,7 @@ class PlayerSelectionScreen:
     def _draw_cards(self) -> None:
         mouse_pos = pygame.mouse.get_pos()
         self.hover_index = None
+        current_time = pygame.time.get_ticks()
 
         for idx, card in enumerate(self.cards):
             char_name = card["name"]
@@ -329,82 +330,93 @@ class PlayerSelectionScreen:
             is_active = idx == self.active_index
             locked_slots = self._locked_slots_for(char_name)
 
-            # Determine styles
-            border_width = 2
+            # --- Interactive State Logic ---
+            scale = 1.0
+            
             if locked_slots:
+                # Pulse effect
+                pulse = (math.sin(current_time * 0.005) + 1) * 0.5  # 0.0 to 1.0
+                glow_int = int(100 + 155 * pulse)
                 bg_color = (20, 20, 30, 240)
-                border_color = (100, 100, 100)
-                glow_color = None
+                border_color = (255, 255, 255) # White border for locked
+                # Bright pulsing glow
+                glow_color = (base_color[0], base_color[1], base_color[2], glow_int)
+                border_width = 3
+                scale = 1.02 # Slightly larger
             elif is_active:
                 bg_color = (30, 35, 50, 250)
                 border_color = base_color
-                glow_color = base_color
+                glow_color = (base_color[0], base_color[1], base_color[2], 120)
                 border_width = 3
+                scale = 1.05
             elif hovered:
-                bg_color = (25, 30, 45, 245)
-                border_color = (base_color[0]//1.5, base_color[1]//1.5, base_color[2]//1.5)
+                bg_color = (35, 40, 60, 250)
+                # Brighten border
+                border_color = tuple(min(255, c + 40) for c in base_color)
                 glow_color = (base_color[0], base_color[1], base_color[2], 100)
+                border_width = 2
+                scale = 1.05
             else:
                 bg_color = (16, 20, 35, 220)
                 border_color = (60, 70, 90)
                 glow_color = None
+                border_width = 2
+            
+            # Apply Scale
+            if scale != 1.0:
+                w = int(rect.width * scale)
+                h = int(rect.height * scale)
+                draw_rect = pygame.Rect(0, 0, w, h)
+                draw_rect.center = rect.center
+            else:
+                draw_rect = rect.copy()
 
-            # 1. Main Card Body
-            # Draw glow
-            if glow_color and not locked_slots:
-                glow_rect = rect.inflate(10, 10)
+            # --- Drawing ---
+
+            # 1. Glow
+            if glow_color:
+                glow_rect = draw_rect.inflate(14, 14)
                 glow_surf = pygame.Surface(glow_rect.size, pygame.SRCALPHA)
-                _draw_rounded_rect(glow_surf, glow_surf.get_rect(), (0,0,0,0), glow_color, 4, CARD_RADIUS + 4)
+                _draw_rounded_rect(glow_surf, glow_surf.get_rect(), (0,0,0,0), glow_color, 6, CARD_RADIUS + 6)
                 self.screen.blit(glow_surf, glow_rect.topleft, special_flags=pygame.BLEND_ADD)
 
-            # Draw background
-            _draw_rounded_rect(self.screen, rect, bg_color, border_color, border_width, CARD_RADIUS)
+            # 2. Main Card Body
+            _draw_rounded_rect(self.screen, draw_rect, bg_color, border_color, border_width, CARD_RADIUS)
 
-            # 2. Inner "Stage" for Character (Top half)
-            stage_height = int(rect.height * 0.55)
-            stage_rect = pygame.Rect(rect.x + 8, rect.y + 8, rect.width - 16, stage_height)
+            # 3. Inner Stage
+            stage_height = int(draw_rect.height * 0.55)
+            stage_rect = pygame.Rect(draw_rect.x + 8, draw_rect.y + 8, draw_rect.width - 16, stage_height)
             stage_color = (10, 12, 20, 150)
             _draw_rounded_rect(self.screen, stage_rect, stage_color, (0,0,0,0), 0, CARD_RADIUS - 4)
 
-            # Bottom gradient for stage
-            grad_h = 40
-            grad_surf = pygame.Surface((stage_rect.width, grad_h), pygame.SRCALPHA)
-            for y in range(grad_h):
-                alpha = int(255 * (y / grad_h))
-                # Match stage color but fade to transparent or darker
-                pygame.draw.line(grad_surf, (5, 8, 15, alpha), (0, y), (stage_rect.width, y))
-            # self.screen.blit(grad_surf, (stage_rect.x, stage_rect.bottom - grad_h)) # Optional depth
-
-            # Shine effect (diagonal)
-            if not locked_slots:
-                shine_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-                pygame.draw.line(shine_surf, (255, 255, 255, 30), (0, rect.height), (rect.width, 0), 80)
-                # self.screen.blit(shine_surf, rect.topleft, special_flags=pygame.BLEND_ADD) # A bit heavy globally
-
-            # 3. Character Sprite
-            # Adjust y position to sit nicely in the stage
+            # 4. Character Sprite
             animation = card["animations"][card["current_state"]]
             frame = animation.image
-            # Center in stage
+            # Scale frame if card is scaled?
+            if scale != 1.0:
+                fw = int(frame.get_width() * scale)
+                fh = int(frame.get_height() * scale)
+                frame = pygame.transform.scale(frame, (fw, fh))
+            
             frame_rect = frame.get_rect(midbottom=(stage_rect.centerx, stage_rect.bottom - 20))
             
-            # Simple shadow under feet
+            # Shadow
             shadow_width = frame_rect.width * 0.7
             if shadow_width > 0:
-                shadow_rect = pygame.Rect(0, 0, shadow_width, 14)
-                shadow_rect.center = (frame_rect.centerx, frame_rect.bottom - 4)
+                shadow_rect = pygame.Rect(0, 0, shadow_width, 14 * scale)
+                shadow_rect.center = (frame_rect.centerx, frame_rect.bottom - 4 * scale)
                 shadow_surf = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
                 pygame.draw.ellipse(shadow_surf, (0, 0, 0, 80), ((0,0), shadow_rect.size))
                 self.screen.blit(shadow_surf, shadow_rect.topleft)
 
             self.screen.blit(frame, frame_rect)
 
-            # 4. Info Section (Bottom Half)
-            info_y_start = stage_rect.bottom + 12
+            # 5. Info Section
+            info_y_start = stage_rect.bottom + 12 * scale
             
-            # Character Name
+            # Name
             name_surf = self._font_body.render(char_name.upper(), True, (255, 255, 255))
-            name_rect = name_surf.get_rect(midtop=(rect.centerx, info_y_start))
+            name_rect = name_surf.get_rect(midtop=(draw_rect.centerx, info_y_start))
             self.screen.blit(name_surf, name_rect)
 
             # Ability Badge
@@ -413,38 +425,54 @@ class PlayerSelectionScreen:
             badge_w = badge_surf.get_width() + 24
             badge_h = badge_surf.get_height() + 10
             badge_rect = pygame.Rect(0, 0, badge_w, badge_h)
-            badge_rect.midtop = (rect.centerx, name_rect.bottom + 10)
+            badge_rect.midtop = (draw_rect.centerx, name_rect.bottom + 10 * scale)
             
-            # Badge background (pill shape) with ability color
             badge_bg_color = (base_color[0], base_color[1], base_color[2], 200)
             _draw_rounded_rect(self.screen, badge_rect, badge_bg_color, base_color, 1, 12)
             self.screen.blit(badge_surf, badge_surf.get_rect(center=badge_rect.center))
 
-            # Description
-            desc_y = badge_rect.bottom + 12
-            desc_lines = meta["desc"].split('\n')
-            for line in desc_lines:
-                line_surf = self._font_small.render(line, True, (180, 190, 200))
-                # Scale down slightly if needed or use smaller font
-                line_rect = line_surf.get_rect(midtop=(rect.centerx, desc_y))
-                self.screen.blit(line_surf, line_rect)
-                desc_y += 20
+            # Description (Only show if NOT locked, to avoid clutter)
+            if not locked_slots:
+                desc_y = badge_rect.bottom + 12 * scale
+                desc_lines = meta["desc"].split('\n')
+                for line in desc_lines:
+                    line_surf = self._font_small.render(line, True, (180, 190, 200))
+                    line_rect = line_surf.get_rect(midtop=(draw_rect.centerx, desc_y))
+                    self.screen.blit(line_surf, line_rect)
+                    desc_y += 20 * scale
 
-            # 5. Lock Badge overlay
+            # 6. Locked Banner / State
             if locked_slots:
-                # Dim the whole card
-                dim_surf = pygame.Surface(rect.size, pygame.SRCALPHA)
-                dim_surf.fill((0, 0, 0, 150))
-                self.screen.blit(dim_surf, rect.topleft)
+                # Dim background
+                dim_surf = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
+                dim_surf.fill((0, 0, 0, 120))
+                self.screen.blit(dim_surf, draw_rect.topleft)
+
+                # Banner
+                banner_height = 50 * scale
+                banner_rect = pygame.Rect(0, 0, draw_rect.width + 20, banner_height)
+                banner_rect.center = draw_rect.center
                 
-                badge_text = ", ".join(f"P{slot + 1}" for slot in locked_slots)
-                badge = self._font_heading.render(badge_text, True, LOCKED_BADGE_TEXT)
+                # Dynamic banner color
+                banner_color = (base_color[0], base_color[1], base_color[2], 230)
                 
-                # Big stamp in center
-                text_rect = badge.get_rect(center=rect.center)
-                bg_rect = text_rect.inflate(40, 20)
-                _draw_rounded_rect(self.screen, bg_rect, (0, 0, 0, 200), LOCKED_BADGE_TEXT, 3, 10)
-                self.screen.blit(badge, text_rect)
+                # Draw Banner
+                pygame.draw.rect(self.screen, banner_color, banner_rect, border_radius=4)
+                pygame.draw.rect(self.screen, (255, 255, 255), banner_rect, 2, border_radius=4)
+
+                # Text
+                players_text = " & ".join([f"P{i+1}" for i in locked_slots])
+                full_text = f"{players_text} LOCKED IN"
+
+                text_surf = self._font_heading.render(full_text, True, (255, 255, 255))
+                # Adjust font size if too big
+                if text_surf.get_width() > banner_rect.width - 20:
+                     w = int(banner_rect.width - 30)
+                     h = int(text_surf.get_height() * (w / text_surf.get_width()))
+                     text_surf = pygame.transform.scale(text_surf, (w, h))
+                
+                text_rect = text_surf.get_rect(center=banner_rect.center)
+                self.screen.blit(text_surf, text_rect)
 
     def _draw_summary(self) -> None:
         panel_rect = pygame.Rect(0, self.height - SUMMARY_PANEL_HEIGHT, self.width, SUMMARY_PANEL_HEIGHT)
@@ -548,8 +576,14 @@ class PlayerSelectionScreen:
             self.active_index = self.characters.index(previous)
 
     def _update_card_states(self, dt: float) -> None:
+        mouse_pos = pygame.mouse.get_pos()
         for idx, card in enumerate(self.cards):
-            desired_state = "run" if idx == self.active_index else "idle"
+            # Check mouse hover or active selection triggers run animation
+            is_hovered = card["rect"].collidepoint(mouse_pos)
+            is_active = (idx == self.active_index)
+            
+            desired_state = "run" if (is_active or is_hovered) else "idle"
+            
             if card["current_state"] != desired_state:
                 card["current_state"] = desired_state
                 card["animations"][desired_state].reset()
