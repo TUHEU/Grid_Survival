@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import List, Optional
 
 import pygame
@@ -50,7 +51,7 @@ CONFIRMED_COLOR = (120, 240, 170)
 CARD_WIDTH = 280
 CARD_HEIGHT = 180
 CARD_RADIUS = 16
-CARD_GUTTER = 26
+CARD_GUTTER = 40
 MAX_COLUMNS = 4
 SUMMARY_PANEL_HEIGHT = 140
 
@@ -92,14 +93,30 @@ class PlayerSelectionScreen:
             MODE_HEADERS["default"],
         )
 
+        # Force title for local multiplayer
+        if self.game_mode == MODE_LOCAL_MULTIPLAYER:
+            self.mode_title = "ASSEMBLE YOUR CREW"
+
         self.characters: List[str] = available_characters() or [DEFAULT_CHARACTER_NAME]
         self.cards: List[dict] = []
         self._build_cards()
 
         # Fonts
-        self._font_heading = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING, bold=True)
+        self._font_heading = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING + 12, bold=True)
         self._font_body = _load_font(FONT_PATH_BODY, FONT_SIZE_BODY)
         self._font_small = _load_font(FONT_PATH_BODY, 18)
+
+        # Background effects
+        self.particles = []
+        for _ in range(50):
+            self.particles.append({
+                "x": random.randint(0, self.width),
+                "y": random.randint(0, self.height),
+                "radius": random.randint(1, 3),
+                "speed": random.uniform(0.2, 0.8),
+                "alpha": random.randint(50, 150)
+            })
+        self._bg_gradient = self._create_gradient()
 
         # Selection state
         self.current_player = 0
@@ -123,7 +140,7 @@ class PlayerSelectionScreen:
         rows = math.ceil(len(self.characters) / cols)
         grid_width = cols * CARD_WIDTH + (cols - 1) * CARD_GUTTER
         start_x = self.width // 2 - grid_width // 2
-        start_y = 150
+        start_y = 200  # Lowered to accommodate larger header
 
         for idx, name in enumerate(self.characters):
             row = idx // cols
@@ -180,21 +197,88 @@ class PlayerSelectionScreen:
 
     # ── drawing helpers ────────────────────────────────────────────────
 
+    def _create_gradient(self) -> pygame.Surface:
+        gradient = pygame.Surface((1, self.height))
+        # Rich dark gradient: dark navy/black to deep purple/blue
+        color_top = (5, 8, 20)
+        color_bottom = (25, 30, 60)
+
+        for y in range(self.height):
+            ratio = y / self.height
+            r = int(color_top[0] + (color_bottom[0] - color_top[0]) * ratio)
+            g = int(color_top[1] + (color_bottom[1] - color_top[1]) * ratio)
+            b = int(color_top[2] + (color_bottom[2] - color_top[2]) * ratio)
+            gradient.set_at((0, y), (r, g, b))
+
+        return pygame.transform.scale(gradient, (self.width, self.height))
+
     def _draw_background(self) -> None:
-        self.screen.fill(BACKGROUND_COLOR)
-        overlay = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
-        overlay.fill(PANEL_OVERLAY)
-        self.screen.blit(overlay, (0, 0))
+        if not hasattr(self, '_bg_gradient'):
+            self._bg_gradient = self._create_gradient()
+        self.screen.blit(self._bg_gradient, (0, 0))
+
+        # Atmospheric glowing particles
+        for p in self.particles:
+            p["y"] -= p["speed"]
+            p["x"] += math.sin(p["y"] * 0.02) * 0.3  # Slight drift
+            
+            # Wrap around
+            if p["y"] < -10:
+                p["y"] = self.height + 10
+                p["x"] = random.randint(0, self.width)
+            
+            radius = p["radius"]
+            # Draw soft glow
+            surf = pygame.Surface((radius * 6, radius * 6), pygame.SRCALPHA)
+            # Core
+            pygame.draw.circle(surf, (180, 220, 255, p["alpha"]), (radius*3, radius*3), radius)
+            # Outer glow
+            pygame.draw.circle(surf, (100, 180, 255, p["alpha"] // 2), (radius*3, radius*3), radius * 2)
+            
+            self.screen.blit(surf, (p["x"] - radius*3, p["y"] - radius*3), special_flags=pygame.BLEND_ADD)
 
     def _draw_header(self) -> None:
+        # Main Title with Glow
         title_surf = self._font_heading.render(self.mode_title, True, HEADER_COLOR)
-        subtitle = f"Selecting player {self.current_player + 1} of {self.num_players}"
-        subtitle_surf = self._font_body.render(subtitle, True, SUBHEADER_COLOR)
-        hint_surf = self._font_small.render(self.mode_hint, True, MODE_HINT_COLOR)
+        title_rect = title_surf.get_rect(center=(self.width // 2, 70))
 
-        self.screen.blit(title_surf, title_surf.get_rect(center=(self.width // 2, 70)))
-        self.screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(self.width // 2, 116)))
-        self.screen.blit(hint_surf, hint_surf.get_rect(center=(self.width // 2, 148)))
+        # Glow effect
+        glow_surf = self._font_heading.render(self.mode_title, True, (80, 180, 255))
+        glow_surf.set_alpha(50)
+        for offset in [(-2, -2), (2, 2), (-2, 2), (2, -2)]:
+            self.screen.blit(glow_surf, title_rect.move(offset))
+
+        self.screen.blit(title_surf, title_rect)
+
+        # Glowing Underline
+        underline_y = title_rect.bottom + 8
+        underline_w = title_rect.width + 60
+        start_x = self.width // 2 - underline_w // 2
+
+        for i, height in enumerate([3, 1]):
+            alpha = 180 if i == 0 else 100
+            color = (100, 200, 255, alpha)
+            line_surf = pygame.Surface((underline_w, height), pygame.SRCALPHA)
+            line_surf.fill(color)
+            self.screen.blit(line_surf, (start_x, underline_y + i * 3))
+
+        # Subtitle
+        if self.game_mode == MODE_LOCAL_MULTIPLAYER:
+            subtitle = "LOCAL MULTIPLAYER"
+        else:
+            subtitle = f"Selecting player {self.current_player + 1} of {self.num_players}"
+        
+        subtitle_surf = self._font_body.render(subtitle, True, SUBHEADER_COLOR)
+        self.screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(self.width // 2, 128)))
+
+        # Hint text
+        if self.game_mode == MODE_LOCAL_MULTIPLAYER:
+             hint_text = f"Player {self.current_player + 1}: Click a character to preview their run"
+        else:
+             hint_text = self.mode_hint
+        
+        hint_surf = self._font_small.render(hint_text, True, MODE_HINT_COLOR)
+        self.screen.blit(hint_surf, hint_surf.get_rect(center=(self.width // 2, 158)))
 
     def _draw_cards(self) -> None:
         mouse_pos = pygame.mouse.get_pos()
