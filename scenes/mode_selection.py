@@ -10,6 +10,7 @@ from settings import (
     SCENE_FADE_SPEED,
     SCENE_OVERLAY_COLOR,
     MODE_BG_COLOR,
+    MODE_BG_IMAGE_PATH,
     MODE_HEADER_COLOR,
     MODE_HEADER_NAME_COLOR,
     MODE_SUBTITLE_COLOR,
@@ -132,6 +133,24 @@ class ModeSelectionScreen:
         self._clicked_mode = None
         self._flash_timer = 0.0
 
+        # Load background
+        self._bg_image = None
+        if MODE_BG_IMAGE_PATH.exists():
+            try:
+                raw_bg = pygame.image.load(str(MODE_BG_IMAGE_PATH)).convert()
+                # Scale using the same cover logic
+                img_w, img_h = raw_bg.get_size()
+                scale_w = self.width / img_w
+                scale_h = self.height / img_h
+                scale = max(scale_w, scale_h)
+                new_w, new_h = int(img_w * scale), int(img_h * scale)
+                scaled_bg = pygame.transform.smoothscale(raw_bg, (new_w, new_h))
+                crop_x = (new_w - self.width) // 2
+                crop_y = (new_h - self.height) // 2
+                self._bg_image = scaled_bg.subsurface((crop_x, crop_y, self.width, self.height))
+            except Exception as e:
+                print(f"Failed to load mode bg: {e}")
+
     def _update_animations(self, dt: float):
         self._anim_time += dt
 
@@ -158,7 +177,14 @@ class ModeSelectionScreen:
                 card["click_scale"] = 1.0
 
     def _draw(self) -> None:
-        self.screen.fill(MODE_BG_COLOR)
+        if self._bg_image:
+            self.screen.blit(self._bg_image, (0, 0))
+            # Overlay
+            overlay = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 115))  # 45% black
+            self.screen.blit(overlay, (0, 0))
+        else:
+            self.screen.fill(MODE_BG_COLOR)
 
         header_y = int(80 + self._header_y_offset)
         welcome_str = "Welcome, "
