@@ -133,6 +133,11 @@ AI_DECISION_INTERVAL = 0.22
 AI_LOOKAHEAD_DISTANCE = 42
 AI_EDGE_MARGIN_WEIGHT = 0.06
 AI_DEFAULT_DIFFICULTY = 5
+ORB_LIFETIME = 20.0
+ORB_SHIELD_DURATION = 20.0
+ORB_SHIELD_WARNING = 4.0
+ORB_FREEZE_DURATION = 10.0
+POWER_ORBS_REQUIRED = 2
 
 # Opening scene audio
 MUSIC_PATH = ASSETS_DIR / "Audio"/ "Background" / "Grid survival 1.mp3"
@@ -153,6 +158,23 @@ SOUND_TILE_WARNING = str(ASSETS_DIR / "Audio" / "SFX" / "hit.wav")
 SOUND_TILE_DISAPPEAR = str(ASSETS_DIR / "Audio" / "SFX" / "destroy.wav")
 SOUND_PLAYER_FALL = str(ASSETS_DIR / "Audio" / "SFX" / "fall.wav")
 SOUND_PLAYER_JUMP = str(ASSETS_DIR / "Audio" / "SFX" / "jump.wav")
+
+# Character power audio cues
+POWER_SFX_DIR = ASSETS_DIR / "Audio" / "sfx_generated"
+SOUND_POWER_READY = str(POWER_SFX_DIR / "power_ready.wav")
+SOUND_POWER_UNAVAILABLE = str(POWER_SFX_DIR / "power_unavailable.wav")
+SOUND_POWER_CAVEMAN = str(POWER_SFX_DIR / "power_caveman_smash.wav")
+SOUND_POWER_NINJA_DASH = str(POWER_SFX_DIR / "power_ninja_dash.wav")
+SOUND_POWER_NINJA_END = str(POWER_SFX_DIR / "power_ninja_reappear.wav")
+SOUND_POWER_WIZARD = str(POWER_SFX_DIR / "power_wizard_freeze.wav")
+SOUND_POWER_WIZARD_END = str(POWER_SFX_DIR / "power_wizard_unfreeze.wav")
+SOUND_POWER_KNIGHT = str(POWER_SFX_DIR / "power_knight_shield.wav")
+SOUND_POWER_KNIGHT_BASH = str(POWER_SFX_DIR / "power_knight_bash.wav")
+SOUND_POWER_ROBOT = str(POWER_SFX_DIR / "power_robot_overclock.wav")
+SOUND_POWER_ROBOT_HIT = str(POWER_SFX_DIR / "power_robot_armour_break.wav")
+SOUND_POWER_SAMURAI = str(POWER_SFX_DIR / "power_samurai_bladestorm.wav")
+SOUND_POWER_ARCHER = str(POWER_SFX_DIR / "power_archer_volley.wav")
+SOUND_POWER_ARROW_HIT = str(POWER_SFX_DIR / "power_arrow_hit.wav")
 
 # Player fall animation duration (seconds)
 PLAYER_FALL_ANIM_DURATION = 0.5
