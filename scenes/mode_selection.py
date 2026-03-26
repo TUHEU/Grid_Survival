@@ -71,6 +71,8 @@ class ModeSelectionScreen:
         self.clock = clock
         self.player_name = player_name
         self.width, self.height = WINDOW_SIZE
+        self.back_requested = False
+        self.quit_requested = False
 
         # Font hierarchy
         self._font_heading = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING, bold=True)
@@ -151,6 +153,8 @@ class ModeSelectionScreen:
             except Exception as e:
                 print(f"Failed to load mode bg: {e}")
 
+        self._back_button_rect = pygame.Rect(24, self.height - 72, 160, 48)
+
     def _update_animations(self, dt: float):
         self._anim_time += dt
 
@@ -203,9 +207,22 @@ class ModeSelectionScreen:
         subtitle_surf.set_alpha(int(self._subtitle_alpha))
         self.screen.blit(subtitle_surf, subtitle_surf.get_rect(center=(self.width // 2, header_y + 55)))
 
+        self._draw_back_button()
+
         mouse_pos = pygame.mouse.get_pos()
         for card in self.cards:
             self._draw_card(card, mouse_pos)
+
+    def _draw_back_button(self) -> None:
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = self._back_button_rect.collidepoint(mouse_pos)
+        base_color = (30, 38, 60, 220)
+        hover_color = (60, 78, 110, 235)
+        bg_color = hover_color if hovered else base_color
+        border_color = (120, 150, 200)
+        _draw_rounded_rect(self.screen, self._back_button_rect, bg_color, border_color, 2, 14)
+        label = self._font_small.render("BACK", True, (235, 235, 245))
+        self.screen.blit(label, label.get_rect(center=self._back_button_rect.center))
 
     def _draw_card(self, card: dict, mouse_pos: tuple) -> None:
         rect = card["rect"].copy()
@@ -307,8 +324,12 @@ class ModeSelectionScreen:
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    self.quit_requested = True
                     return None
                 if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                        self.back_requested = True
+                        return None
                     if event.key == pygame.K_1:
                         self._clicked_mode = MODE_VS_COMPUTER
                         self.cards[0]["click_timer"] = 0.1
@@ -319,6 +340,9 @@ class ModeSelectionScreen:
                         self._clicked_mode = MODE_ONLINE_MULTIPLAYER
                         self.cards[2]["click_timer"] = 0.1
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self._back_button_rect.collidepoint(event.pos):
+                        self.back_requested = True
+                        return None
                     for card in self.cards:
                         hover_rect = card["rect"].copy()
                         hover_rect.y += int(card["hover_y"])

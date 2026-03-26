@@ -114,6 +114,8 @@ class PlayerSelectionScreen:
         self.game_mode = game_mode
         self.num_players = max(1, num_players)
         self.width, self.height = WINDOW_SIZE
+        self.back_requested = False
+        self.quit_requested = False
 
         self.mode_title, self.mode_hint = MODE_HEADERS.get(
             game_mode,
@@ -157,6 +159,7 @@ class PlayerSelectionScreen:
         self._lock_button_rect.center = (self.width // 2 + 180, button_y)
         self._back_button_rect = pygame.Rect(0, 0, BUTTON_WIDTH - 30, BUTTON_HEIGHT - 6)
         self._back_button_rect.center = (self.width // 2 - 200, button_y)
+        self._closing = False
 
     # ── card + animation setup ──────────────────────────────────────────
 
@@ -584,6 +587,13 @@ class PlayerSelectionScreen:
                 ts = pygame.transform.scale(p_text, (int(p_text.get_width()*0.6), int(p_text.get_height()*0.6)))
                 self.screen.blit(ts, ts.get_rect(center=badge_center))
 
+    def _trigger_back(self) -> None:
+        if self._closing:
+            return
+        self.back_requested = True
+        self._closing = True
+        self._fade(False)
+
     def _draw(self) -> None:
         self._draw_background()
         self._draw_header()
@@ -694,6 +704,7 @@ class PlayerSelectionScreen:
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    self.quit_requested = True
                     return None
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self._lock_button_rect.collidepoint(event.pos):
@@ -701,6 +712,7 @@ class PlayerSelectionScreen:
                         if result is not None:
                             return result
                     elif self._back_button_rect.collidepoint(event.pos):
+                        self._trigger_back()
                         return None
                     else:
                         for idx, card in enumerate(self.cards):
@@ -709,6 +721,7 @@ class PlayerSelectionScreen:
                                 break
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
+                        self._trigger_back()
                         return None
                     if event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         result = self._lock_current_selection()

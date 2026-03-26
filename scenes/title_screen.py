@@ -99,6 +99,7 @@ class TitleScreen:
         self._spawn_particles(TITLE_PARTICLE_COUNT)
 
         self._start_music()
+        self._back_button_rect = pygame.Rect(24, self.height - 68, 150, 46)
 
         # Load background
         self._bg_image = None
@@ -274,6 +275,19 @@ class TitleScreen:
             warn_surf.set_alpha(warn_alpha)
             self.screen.blit(warn_surf, warn_surf.get_rect(center=(self.width // 2, 490)))
 
+        self._draw_back_button()
+
+    def _draw_back_button(self) -> None:
+        mouse_pos = pygame.mouse.get_pos()
+        hovered = self._back_button_rect.collidepoint(mouse_pos)
+        base_color = (30, 35, 55, 210)
+        hover_color = (60, 70, 100, 230)
+        bg_color = hover_color if hovered else base_color
+        border_color = (140, 150, 190)
+        _draw_rounded_rect(self.screen, self._back_button_rect, bg_color, border_color, 2, 14)
+        label = self._font_small.render("EXIT", True, (235, 235, 245))
+        self.screen.blit(label, label.get_rect(center=self._back_button_rect.center))
+
     # ── shake update ─────────────────────────────────────────────────────
 
     def _update_shake(self, dt: float) -> None:
@@ -340,7 +354,14 @@ class TitleScreen:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return None
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self._back_button_rect.collidepoint(event.pos):
+                        self._fade("out")
+                        return None
                 if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self._fade("out")
+                        return None
                     if event.key == pygame.K_RETURN:
                         if self.player_name.strip():
                             self._fade("out")
