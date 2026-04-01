@@ -62,6 +62,43 @@ class DebrisParticle:
         surface.blit(s, (int(self.x - self.size / 2), int(self.y - self.size / 2)))
 
 
+class Asteroid:
+    """Simple falling projectile that targets a tile and triggers its fall."""
+
+    def __init__(self, target_tile: "TMXTile"):
+        cx, cy = target_tile._iso_center()
+        self.target_tile = target_tile
+        self.pos = pygame.Vector2(cx, -80)
+        self.radius = 22
+        self.speed = 600.0
+        self.active = True
+        self.trail = []
+
+    def update(self, dt: float) -> bool:
+        if not self.active:
+            return False
+        cx, cy = self.target_tile._iso_center()
+        direction = pygame.Vector2(cx - self.pos.x, cy - self.pos.y)
+        if direction.length() > 0:
+            direction = direction.normalize()
+        self.pos += direction * self.speed * dt
+        self.trail.append(self.pos.copy())
+        if len(self.trail) > 6:
+            self.trail.pop(0)
+        if self.pos.distance_to((cx, cy)) < 16:
+            self.active = False
+            return True
+        return False
+
+    def draw(self, surface: pygame.Surface):
+        if not self.active:
+            return
+        for i, tpos in enumerate(self.trail):
+            alpha = max(30, 180 - (len(self.trail) - i) * 25)
+            pygame.draw.circle(surface, (255, 180, 90, alpha), (int(tpos.x), int(tpos.y)), max(4, self.radius - i*2))
+        pygame.draw.circle(surface, (255, 220, 120), (int(self.pos.x), int(self.pos.y)), self.radius)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tile state enum
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +107,8 @@ class TileState(Enum):
     """Tile lifecycle states."""
     NORMAL = "normal"
     WARNING = "warning"
-    CRUMBLING = "crumbling"   # NEW: visual crumble before full disappearance
+    CRUMBLING = "crumbling"   # visual crumble before impact
+    FALLING = "falling"       # tile has detached and is falling
     DISAPPEARED = "disappeared"
 
 
@@ -99,6 +137,13 @@ class TMXTile:
         self.crumble_timer = 0.0      # time spent in CRUMBLING state
         self.flash_speed = 8.0        # flashes per second during WARNING
         self.alpha = 255
+
+        # Falling simulation
+        self.fall_timer = 0.0
+        self.fall_velocity = 0.0
+        self.fall_offset_y = 0.0
+        self.shake_timer = 0.0
+        self.shake_amp = 2.5
 
         # Debris particles spawned when crumble starts
         self.particles: List[DebrisParticle] = []
@@ -130,7 +175,7 @@ class TMXTile:
     def update(self, dt: float) -> bool:
         """
         Update tile state.
-        Returns True when the tile *just* fully disappeared (CRUMBLING → DISAPPEARED).
+        Returns True when the tile *just* fully disappeared (FALLING → DISAPPEARED).
         """
         # Update debris particles regardless of state
         for p in self.particles:
@@ -153,6 +198,19 @@ class TMXTile:
             self.alpha = int(255 * (1.0 - progress))
 
             if self.crumble_timer >= TILE_CRUMBLE_DURATION:
+                # Switch to falling; keep image but start physics
+                self.state = TileState.FALLING
+                self.fall_timer = 0.0
+                self.fall_velocity = 0.0
+                self.fall_offset_y = 0.0
+                self.alpha = 255
+
+        elif self.state == TileState.FALLING:
+            self.fall_timer += dt
+            self.fall_velocity += 1400 * dt
+            self.fall_offset_y += self.fall_velocity * dt
+            self.shake_timer += dt * 18
+            if self.fall_offset_y > WINDOW_SIZE[1] + 200:
                 self.state = TileState.DISAPPEARED
                 self.alpha = 0
                 return True
@@ -250,6 +308,7 @@ class TMXTileManager:
             self.offset_x = self.offset_y = 0
         self.tiles: Dict[Tuple[int, int], TMXTile] = {}
         self.disappeared_tiles: List[TMXTile] = []
+        self.asteroids: List[Asteroid] = []
 
         # Difficulty scaling parameters
         self.time_elapsed = 0.0
@@ -343,12 +402,27 @@ class TMXTileManager:
 
         self.disappear_timer += dt
 
+        # Update asteroids
+        for asteroid in list(self.asteroids):
+            hit = asteroid.update(dt)
+            if hit:
+                # Force target tile into falling state
+                tile = asteroid.target_tile
+                if tile.state not in (TileState.FALLING, TileState.DISAPPEARED):
+                    tile.state = TileState.FALLING
+                    tile.fall_timer = 0.0
+                    tile.fall_velocity = 0.0
+                    tile.fall_offset_y = 0.0
+                self.audio.play_sfx(SOUND_TILE_DISAPPEAR)
+                self.asteroids.remove(asteroid)
+            elif not asteroid.active:
+                self.asteroids.remove(asteroid)
+
         # Update existing tiles; collect newly disappeared ones
         for tile in self.tiles.values():
             just_disappeared = tile.update(dt)
             if just_disappeared:
                 self.disappeared_tiles.append(tile)
-                self.audio.play_sfx(SOUND_TILE_DISAPPEAR)
 
         # Trigger new tile warnings based on difficulty
         if self.disappear_timer >= self.current_interval:
@@ -383,6 +457,8 @@ class TMXTileManager:
         for tile in tiles_to_warn:
             tile.set_warning()
             self.audio.play_sfx(SOUND_TILE_WARNING)
+            # Spawn an asteroid aimed at this tile; it will transition tile to FALLING on impact
+            self.asteroids.append(Asteroid(tile))
 
     # ── drawing ────────────────────────────────────────────────────────────
 
@@ -402,7 +478,11 @@ class TMXTileManager:
             if tile.state == TileState.DISAPPEARED:
                 continue
             if tile.image:
-                surface.blit(tile.image, (tile.pixel_x, tile.pixel_y))
+                offset_y = int(tile.fall_offset_y) if tile.state == TileState.FALLING else 0
+                surface.blit(tile.image, (tile.pixel_x, tile.pixel_y + offset_y))
+        # Draw asteroids on top
+        for asteroid in self.asteroids:
+            asteroid.draw(surface)
 
 
     # ── walkable mask ──────────────────────────────────────────────────────
@@ -418,7 +498,7 @@ class TMXTileManager:
         updated_mask = original_mask.copy()
 
         for tile in self.tiles.values():
-            if tile.state in (TileState.DISAPPEARED, TileState.CRUMBLING):
+            if tile.state in (TileState.DISAPPEARED, TileState.CRUMBLING, TileState.FALLING):
                 tile_surface = pygame.Surface((tile.tile_width, tile.tile_height), pygame.SRCALPHA)
                 points = [
                     (p[0] - tile.pixel_x, p[1] - tile.pixel_y)
@@ -444,6 +524,7 @@ class TMXTileManager:
         for tile in self.tiles.values():
             tile.reset()
         self.disappeared_tiles.clear()
+        self.asteroids.clear()
         self.time_elapsed = 0.0
         self.grace_timer = 0.0
         self.current_interval = self.base_disappear_interval
