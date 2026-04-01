@@ -1,5 +1,5 @@
 import math
-from typing import Optional
+from typing import Any, Optional
 
 import pygame
 
@@ -53,6 +53,7 @@ class Player:
 
     def __init__(self, position=PLAYER_START_POS, controls=None, character_name: str | None = None):
         self.is_ai = False
+        self._eliminated = False
         self.spawn_position = pygame.Vector2(position)
         self.position = self.spawn_position.copy()
         self.speed = PLAYER_SPEED
@@ -110,6 +111,7 @@ class Player:
         self._active_orb_timer = 0.0
         self._active_orb_indefinite = False
         self._active_orb_duration = 0.0
+        self._extra_lives = 0  # Extra lives from LIFE orbs
 
     def _load_animations(self):
         animations = {}
@@ -182,6 +184,22 @@ class Player:
 
     def has_active_shield(self) -> bool:
         return self._shield_timer > 0
+
+    def add_life(self):
+        """Add an extra life from a LIFE orb."""
+        self._extra_lives += 1
+        print(f"DEBUG: Player now has {self._extra_lives} extra lives")
+
+    def has_extra_life(self) -> bool:
+        """Check if player has an extra life available."""
+        return self._extra_lives > 0
+
+    def use_life(self) -> bool:
+        """Use an extra life to revive. Returns True if life was used."""
+        if self._extra_lives > 0:
+            self._extra_lives -= 1
+            return True
+        return False
 
     def apply_freeze(self, duration: float):
         self._freeze_timer = duration
@@ -285,6 +303,26 @@ class Player:
         self._tick_status_effects(dt)
         move_vector = self._input_vector(keys)
         jump_pressed = self._check_jump_input(keys)
+        if self.is_frozen():
+            move_vector = pygame.Vector2(0, 0)
+            jump_pressed = False
+        self._update_with_move_vector(dt, move_vector, walkable_mask, walkable_bounds, jump_pressed)
+
+    def update_from_input_state(
+        self,
+        dt: float,
+        input_state: dict[str, Any] | Any,
+        walkable_mask,
+        walkable_bounds,
+    ):
+        """Update from a simple boolean mapping instead of pygame key state."""
+        self._tick_status_effects(dt)
+        data = input_state if isinstance(input_state, dict) else {}
+        move_vector = pygame.Vector2(
+            float(bool(data.get("right", False))) - float(bool(data.get("left", False))),
+            float(bool(data.get("down", False))) - float(bool(data.get("up", False))),
+        )
+        jump_pressed = bool(data.get("jump", False))
         if self.is_frozen():
             move_vector = pygame.Vector2(0, 0)
             jump_pressed = False
@@ -460,6 +498,7 @@ class Player:
                 )
 
     def reset(self):
+        self._eliminated = False
         self.position = self.spawn_position.copy()
         self.velocity.update(0, 0)
         self.state = "idle"
@@ -487,7 +526,87 @@ class Player:
         self._immune_to_hazards = False
         self._power_alpha = 255
         self.clear_active_orb()
+        self._extra_lives = 0
         self._refresh_collision_shape(force=True)
+
+    def snapshot_state(self) -> dict[str, Any]:
+        orb_label, orb_timer, orb_indefinite, orb_duration = self.get_active_orb_status()
+        return {
+            "x": float(self.position.x),
+            "y": float(self.position.y),
+            "facing": self.facing,
+            "state": self.state,
+            "falling": self.falling,
+            "fall_velocity": float(self.fall_velocity),
+            "drowning": self.drowning,
+            "jumping": self.jumping,
+            "z": float(self.z),
+            "z_velocity": float(self.z_velocity),
+            "on_ground": bool(self.on_ground),
+            "velocity_x": float(self.velocity.x),
+            "velocity_y": float(self.velocity.y),
+            "character_name": self.character_name,
+            "power_orb_charges": int(self.power_orb_charges),
+            "shield_timer": float(self._shield_timer),
+            "freeze_timer": float(self._freeze_timer),
+            "power_alpha": int(self._power_alpha),
+            "power_speed_boost": float(self._power_speed_boost),
+            "power_jump_boost": float(self._power_jump_boost),
+            "orb_speed_boost": float(self._orb_speed_boost),
+            "active_orb_label": orb_label,
+            "active_orb_timer": float(orb_timer),
+            "active_orb_indefinite": bool(orb_indefinite),
+            "active_orb_duration": float(orb_duration),
+            "eliminated": bool(self._eliminated),
+            "extra_lives": int(self._extra_lives),
+        }
+
+    def apply_snapshot_state(self, snapshot: dict[str, Any]):
+        if not isinstance(snapshot, dict):
+            return
+
+        self.position = pygame.Vector2(
+            float(snapshot.get("x", self.position.x)),
+            float(snapshot.get("y", self.position.y)),
+        )
+        self.velocity = pygame.Vector2(
+            float(snapshot.get("velocity_x", self.velocity.x)),
+            float(snapshot.get("velocity_y", self.velocity.y)),
+        )
+        self.fall_velocity = float(snapshot.get("fall_velocity", self.fall_velocity))
+        self.falling = bool(snapshot.get("falling", self.falling))
+        self.drowning = bool(snapshot.get("drowning", self.drowning))
+        self.jumping = bool(snapshot.get("jumping", self.jumping))
+        self.z = float(snapshot.get("z", self.z))
+        self.z_velocity = float(snapshot.get("z_velocity", self.z_velocity))
+        self.on_ground = bool(snapshot.get("on_ground", self.on_ground))
+        self.power_orb_charges = int(snapshot.get("power_orb_charges", self.power_orb_charges))
+        self._shield_timer = float(snapshot.get("shield_timer", self._shield_timer))
+        self._freeze_timer = float(snapshot.get("freeze_timer", self._freeze_timer))
+        self._power_alpha = int(snapshot.get("power_alpha", self._power_alpha))
+        self._power_speed_boost = float(snapshot.get("power_speed_boost", self._power_speed_boost))
+        self._power_jump_boost = float(snapshot.get("power_jump_boost", self._power_jump_boost))
+        self._orb_speed_boost = float(snapshot.get("orb_speed_boost", self._orb_speed_boost))
+        self._eliminated = bool(snapshot.get("eliminated", self._eliminated))
+        self._active_orb_label = snapshot.get("active_orb_label")
+        self._extra_lives = int(snapshot.get("extra_lives", self._extra_lives))
+        self._active_orb_timer = float(snapshot.get("active_orb_timer", self._active_orb_timer))
+        self._active_orb_indefinite = bool(
+            snapshot.get("active_orb_indefinite", self._active_orb_indefinite)
+        )
+        self._active_orb_duration = float(
+            snapshot.get("active_orb_duration", self._active_orb_duration)
+        )
+
+        facing = snapshot.get("facing", self.facing)
+        state = snapshot.get("state", self.state)
+        if state in self.animations and facing in self.animations[state]:
+            self._set_state(state, facing)
+        else:
+            self.facing = facing
+            self.state = state
+
+        self.rect.center = (round(self.position.x), round(self.position.y))
 
     def _feet_mask_for_rect(self, rect: pygame.Rect) -> pygame.mask.Mask:
         size = rect.size

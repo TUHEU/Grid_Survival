@@ -449,3 +449,67 @@ class TMXTileManager:
         self.current_interval = self.base_disappear_interval
         self.disappear_timer = 0.0
         self.simultaneous_tiles = 1
+
+    def snapshot_state(self) -> dict:
+        """Serialize manager and non-default tile state for LAN sync."""
+        tile_states = []
+        for tile in self.tiles.values():
+            if tile.state == TileState.NORMAL and not tile.particles:
+                continue
+            tile_states.append(
+                {
+                    "x": tile.grid_x,
+                    "y": tile.grid_y,
+                    "state": tile.state.value,
+                    "warning_timer": float(tile.warning_timer),
+                    "crumble_timer": float(tile.crumble_timer),
+                    "alpha": int(tile.alpha),
+                }
+            )
+
+        return {
+            "time_elapsed": float(self.time_elapsed),
+            "current_interval": float(self.current_interval),
+            "disappear_timer": float(self.disappear_timer),
+            "simultaneous_tiles": int(self.simultaneous_tiles),
+            "grace_timer": float(self.grace_timer),
+            "tiles": tile_states,
+        }
+
+    def apply_snapshot(self, snapshot: dict | None) -> None:
+        """Apply a host snapshot on the LAN client."""
+        if not isinstance(snapshot, dict):
+            return
+
+        self.time_elapsed = float(snapshot.get("time_elapsed", self.time_elapsed))
+        self.current_interval = float(snapshot.get("current_interval", self.current_interval))
+        self.disappear_timer = float(snapshot.get("disappear_timer", self.disappear_timer))
+        self.simultaneous_tiles = int(snapshot.get("simultaneous_tiles", self.simultaneous_tiles))
+        self.grace_timer = float(snapshot.get("grace_timer", self.grace_timer))
+        self.disappeared_tiles.clear()
+
+        tile_lookup = {}
+        for tile_state in snapshot.get("tiles", []) or []:
+            if not isinstance(tile_state, dict):
+                continue
+            key = (int(tile_state.get("x", -1)), int(tile_state.get("y", -1)))
+            tile_lookup[key] = tile_state
+
+        for key, tile in self.tiles.items():
+            state = tile_lookup.get(key)
+            tile.particles.clear()
+            if not state:
+                if tile.state != TileState.NORMAL:
+                    tile.reset()
+                continue
+
+            state_value = state.get("state", TileState.NORMAL.value)
+            try:
+                tile.state = TileState(state_value)
+            except ValueError:
+                tile.state = TileState.NORMAL
+            tile.warning_timer = float(state.get("warning_timer", 0.0))
+            tile.crumble_timer = float(state.get("crumble_timer", 0.0))
+            tile.alpha = int(state.get("alpha", 255))
+            if tile.state == TileState.DISAPPEARED:
+                self.disappeared_tiles.append(tile)

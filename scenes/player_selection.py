@@ -99,7 +99,7 @@ CHARACTER_METADATA = {
 MODE_HEADERS = {
     MODE_VS_COMPUTER: ("SOLO RUN", ""),
     MODE_LOCAL_MULTIPLAYER: ("LOCAL MULTIPLAYER", ""),
-    MODE_ONLINE_MULTIPLAYER: ("ONLINE MATCH", ""),
+    MODE_ONLINE_MULTIPLAYER: ("PLAY OVER LAN", ""),
     "default": ("CHARACTER SELECT", "Preview idle vs. run before locking in."),
 }
 

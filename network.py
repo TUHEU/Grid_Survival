@@ -1,19 +1,59 @@
 """
 LAN multiplayer networking for Grid Survival.
-Implements host/client connection and state synchronization.
+
+The host runs the authoritative simulation. The client sends input updates and
+receives world snapshots back over a simple length-prefixed JSON protocol.
 """
 
-import socket
+from __future__ import annotations
+
 import json
-import threading
 import queue
-from typing import Optional, Dict, Any
-from dataclasses import dataclass, asdict
+import socket
+import threading
+import time
+from dataclasses import asdict, dataclass
+from typing import Any, Optional
+
+
+DEFAULT_PORT = 5555
+DISCOVERY_PORT = 5556
+DISCOVERY_MAGIC = "grid_survival_lan_v1"
+DISCOVERY_HOST_MAX_AGE = 4.0
+
+
+@dataclass
+class InputState:
+    """Pressed-state payload sent from the client to the host."""
+
+    up: bool = False
+    down: bool = False
+    left: bool = False
+    right: bool = False
+    jump: bool = False
+    power_pressed: bool = False
+
+    @classmethod
+    def from_mapping(cls, data: dict[str, Any] | None) -> "InputState":
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            up=bool(data.get("up", False)),
+            down=bool(data.get("down", False)),
+            left=bool(data.get("left", False)),
+            right=bool(data.get("right", False)),
+            jump=bool(data.get("jump", False)),
+            power_pressed=bool(data.get("power_pressed", False)),
+        )
+
+    def to_dict(self) -> dict[str, bool]:
+        return asdict(self)
 
 
 @dataclass
 class PlayerState:
-    """Player state for network synchronization."""
+    """Legacy-compatible player state payload."""
+
     x: float
     y: float
     facing: str
@@ -23,191 +63,406 @@ class PlayerState:
     eliminated: bool
 
 
+@dataclass
+class DiscoveredHost:
+    """A host discovered on the local network."""
+
+    host_name: str
+    machine_name: str
+    address: str
+    port: int
+    last_seen: float
+
+
 class NetworkManager:
-    """Base network manager for multiplayer."""
-    
-    def __init__(self):
+    """Base network manager for LAN multiplayer."""
+
+    def __init__(self, *, is_host: bool):
+        self.is_host = is_host
         self.socket: Optional[socket.socket] = None
         self.connected = False
         self.running = False
         self.receive_thread: Optional[threading.Thread] = None
-        self.message_queue = queue.Queue()
-        self.player_states: Dict[str, PlayerState] = {}
-    
-    def send_player_state(self, player_id: str, state: PlayerState):
-        """Send player state to connected peer."""
+        self.message_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
+        self._send_lock = threading.Lock()
+        self.peer_address: Optional[tuple[str, int]] = None
+        self.last_error: Optional[str] = None
+
+    def send_message(self, message_type: str, **payload: Any) -> bool:
+        """Send a framed JSON message to the connected peer."""
         if not self.connected or not self.socket:
-            return
-        
+            return False
+
         try:
-            message = {
-                'type': 'player_state',
-                'player_id': player_id,
-                'state': asdict(state)
-            }
-            data = json.dumps(message).encode('utf-8')
-            # Send message length first, then message
-            length = len(data)
-            self.socket.sendall(length.to_bytes(4, 'big'))
-            self.socket.sendall(data)
-        except (socket.error, BrokenPipeError) as e:
-            print(f"Error sending player state: {e}")
+            message = {"type": message_type, **payload}
+            encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+            header = len(encoded).to_bytes(4, "big")
+            with self._send_lock:
+                self.socket.sendall(header)
+                self.socket.sendall(encoded)
+            return True
+        except (socket.error, BrokenPipeError, OSError) as exc:
+            self.last_error = str(exc)
             self.connected = False
-    
-    def get_messages(self):
-        """Get all queued messages."""
-        messages = []
+            return False
+
+    def get_messages(self) -> list[dict[str, Any]]:
+        """Return all queued messages received since the last call."""
+        messages: list[dict[str, Any]] = []
         while not self.message_queue.empty():
             try:
                 messages.append(self.message_queue.get_nowait())
             except queue.Empty:
                 break
         return messages
-    
-    def _receive_loop(self):
-        """Background thread for receiving messages."""
-        while self.running and self.connected:
+
+    def _start_receive_loop(self) -> None:
+        self.running = True
+        self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
+        self.receive_thread.start()
+
+    def _receive_loop(self) -> None:
+        while self.running and self.connected and self.socket:
             try:
-                # Receive message length
                 length_bytes = self._recv_exact(4)
                 if not length_bytes:
                     break
-                
-                length = int.from_bytes(length_bytes, 'big')
-                
-                # Receive message data
-                data = self._recv_exact(length)
-                if not data:
+
+                length = int.from_bytes(length_bytes, "big")
+                if length <= 0:
+                    continue
+
+                payload = self._recv_exact(length)
+                if not payload:
                     break
-                
-                message = json.loads(data.decode('utf-8'))
-                self.message_queue.put(message)
-                
-            except (socket.error, json.JSONDecodeError) as e:
-                print(f"Error receiving data: {e}")
+
+                message = json.loads(payload.decode("utf-8"))
+                if isinstance(message, dict):
+                    self.message_queue.put(message)
+            except (socket.error, OSError, json.JSONDecodeError) as exc:
+                self.last_error = str(exc)
                 break
-        
+
         self.connected = False
-    
-    def _recv_exact(self, num_bytes: int) -> Optional[bytes]:
-        """Receive exact number of bytes."""
-        data = b''
-        while len(data) < num_bytes:
+        self.running = False
+
+    def _recv_exact(self, size: int) -> Optional[bytes]:
+        if not self.socket:
+            return None
+
+        chunks = bytearray()
+        while len(chunks) < size and self.running:
             try:
-                chunk = self.socket.recv(num_bytes - len(data))
-                if not chunk:
-                    return None
-                data += chunk
-            except socket.error:
+                chunk = self.socket.recv(size - len(chunks))
+            except socket.timeout:
+                continue
+            except (socket.error, OSError):
                 return None
-        return data
-    
-    def disconnect(self):
-        """Disconnect from network."""
+            if not chunk:
+                return None
+            chunks.extend(chunk)
+        return bytes(chunks)
+
+    def disconnect(self) -> None:
         self.running = False
         self.connected = False
         if self.socket:
             try:
-                self.socket.close()
-            except:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
                 pass
+            try:
+                self.socket.close()
+            except OSError:
+                pass
+            self.socket = None
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=1.0)
 
 
 class NetworkHost(NetworkManager):
-    """Host side of network multiplayer."""
-    
-    def __init__(self, port: int = 5555):
-        super().__init__()
+    """Host-side connection manager."""
+
+    def __init__(self, port: int = DEFAULT_PORT):
+        super().__init__(is_host=True)
         self.port = port
         self.server_socket: Optional[socket.socket] = None
-    
-    def start_hosting(self) -> bool:
-        """Start hosting a game."""
+        self.listening = False
+        self.advertised_name = "Host"
+        self.machine_name = socket.gethostname()
+        self.discovery_socket: Optional[socket.socket] = None
+        self.discovery_thread: Optional[threading.Thread] = None
+        self.discovery_running = False
+
+    def start_hosting(self, advertised_name: str | None = None) -> bool:
+        """Start listening for a LAN client without blocking the UI thread."""
         try:
+            if advertised_name:
+                self.advertised_name = advertised_name
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(('0.0.0.0', self.port))
+            self.server_socket.bind(("0.0.0.0", self.port))
             self.server_socket.listen(1)
-            self.server_socket.settimeout(30.0)  # 30 second timeout for accepting
-            
-            print(f"Hosting on port {self.port}, waiting for client...")
-            
-            # Accept connection
-            self.socket, addr = self.server_socket.accept()
-            self.socket.settimeout(None)  # Remove timeout after connection
-            self.connected = True
-            self.running = True
-            
-            print(f"Client connected from {addr}")
-            
-            # Start receive thread
-            self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
-            self.receive_thread.start()
-            
+            self.server_socket.setblocking(False)
+            self._start_discovery_responder()
+            self.listening = True
+            self.last_error = None
             return True
-            
-        except socket.timeout:
-            print("Connection timeout - no client connected")
+        except (socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            self.listening = False
+            if self.server_socket:
+                try:
+                    self.server_socket.close()
+                except OSError:
+                    pass
+                self.server_socket = None
+            self._stop_discovery_responder()
             return False
-        except socket.error as e:
-            print(f"Error starting host: {e}")
+
+    def poll_connection(self) -> bool:
+        """Accept a client if one is waiting."""
+        if self.connected:
+            return True
+        if not self.server_socket or not self.listening:
             return False
-    
-    def disconnect(self):
-        """Disconnect and close server."""
+
+        try:
+            client_socket, addr = self.server_socket.accept()
+        except BlockingIOError:
+            return False
+        except (socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            return False
+
+        client_socket.settimeout(0.25)
+        self.socket = client_socket
+        self.peer_address = addr
+        self.connected = True
+        self.last_error = None
+        self._start_receive_loop()
+        return True
+
+    def wait_for_connection(self, timeout: float = 30.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.poll_connection():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def disconnect(self) -> None:
         super().disconnect()
+        self.listening = False
+        self._stop_discovery_responder()
         if self.server_socket:
             try:
                 self.server_socket.close()
-            except:
+            except OSError:
                 pass
+            self.server_socket = None
+
+    def _start_discovery_responder(self) -> None:
+        self.discovery_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.discovery_socket.bind(("0.0.0.0", DISCOVERY_PORT))
+        self.discovery_socket.settimeout(0.25)
+        self.discovery_running = True
+        self.discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
+        self.discovery_thread.start()
+
+    def _stop_discovery_responder(self) -> None:
+        self.discovery_running = False
+        if self.discovery_socket:
+            try:
+                self.discovery_socket.close()
+            except OSError:
+                pass
+            self.discovery_socket = None
+        if self.discovery_thread and self.discovery_thread.is_alive():
+            self.discovery_thread.join(timeout=1.0)
+
+    def _discovery_loop(self) -> None:
+        while self.discovery_running and self.discovery_socket:
+            try:
+                payload, addr = self.discovery_socket.recvfrom(4096)
+            except socket.timeout:
+                continue
+            except (socket.error, OSError):
+                break
+
+            try:
+                message = json.loads(payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+
+            if not isinstance(message, dict):
+                continue
+            if message.get("magic") != DISCOVERY_MAGIC or message.get("type") != "discover":
+                continue
+            if self.connected:
+                continue
+
+            response = {
+                "magic": DISCOVERY_MAGIC,
+                "type": "host_announce",
+                "host_name": self.advertised_name,
+                "machine_name": self.machine_name,
+                "port": self.port,
+            }
+            try:
+                self.discovery_socket.sendto(
+                    json.dumps(response, separators=(",", ":")).encode("utf-8"),
+                    addr,
+                )
+            except (socket.error, OSError):
+                continue
 
 
 class NetworkClient(NetworkManager):
-    """Client side of network multiplayer."""
-    
+    """Client-side connection manager."""
+
     def __init__(self):
-        super().__init__()
-    
-    def connect_to_host(self, host: str, port: int = 5555) -> bool:
-        """Connect to a host."""
+        super().__init__(is_host=False)
+
+    def connect_to_host(self, host: str, port: int = DEFAULT_PORT) -> bool:
+        """Connect to the host over TCP."""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(10.0)  # 10 second connection timeout
-            
-            print(f"Connecting to {host}:{port}...")
-            self.socket.connect((host, port))
-            self.socket.settimeout(None)  # Remove timeout after connection
-            
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(10.0)
+            client.connect((host, port))
+            client.settimeout(0.25)
+            self.socket = client
+            self.peer_address = (host, port)
             self.connected = True
-            self.running = True
-            
-            print(f"Connected to host at {host}:{port}")
-            
-            # Start receive thread
-            self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
-            self.receive_thread.start()
-            
+            self.last_error = None
+            self._start_receive_loop()
             return True
-            
-        except socket.timeout:
-            print("Connection timeout")
+        except (socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            self.connected = False
+            if self.socket:
+                try:
+                    self.socket.close()
+                except OSError:
+                    pass
+                self.socket = None
             return False
-        except socket.error as e:
-            print(f"Error connecting to host: {e}")
+
+
+class LanGameFinder:
+    """Broadcast for LAN hosts and collect their announcements."""
+
+    def __init__(self):
+        self.socket: Optional[socket.socket] = None
+        self.last_error: Optional[str] = None
+        self._hosts: dict[tuple[str, int], DiscoveredHost] = {}
+
+    def start(self) -> bool:
+        try:
+            finder_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            finder_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            finder_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            finder_socket.bind(("0.0.0.0", 0))
+            finder_socket.settimeout(0.05)
+            self.socket = finder_socket
+            self.last_error = None
+            self.probe()
+            return True
+        except (socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            self.close()
             return False
+
+    def close(self) -> None:
+        if self.socket:
+            try:
+                self.socket.close()
+            except OSError:
+                pass
+            self.socket = None
+
+    def probe(self) -> None:
+        if not self.socket:
+            return
+
+        probe = {
+            "magic": DISCOVERY_MAGIC,
+            "type": "discover",
+            "timestamp": time.time(),
+        }
+        encoded = json.dumps(probe, separators=(",", ":")).encode("utf-8")
+        for address in _candidate_broadcast_addresses():
+            try:
+                self.socket.sendto(encoded, (address, DISCOVERY_PORT))
+            except (socket.error, OSError):
+                continue
+
+    def poll_hosts(self) -> list[DiscoveredHost]:
+        if not self.socket:
+            return []
+
+        now = time.time()
+        while True:
+            try:
+                payload, addr = self.socket.recvfrom(4096)
+            except socket.timeout:
+                break
+            except (socket.error, OSError):
+                break
+
+            try:
+                message = json.loads(payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+
+            if not isinstance(message, dict):
+                continue
+            if message.get("magic") != DISCOVERY_MAGIC or message.get("type") != "host_announce":
+                continue
+
+            port = int(message.get("port", DEFAULT_PORT))
+            key = (addr[0], port)
+            self._hosts[key] = DiscoveredHost(
+                host_name=str(message.get("host_name", "Host")),
+                machine_name=str(message.get("machine_name", addr[0])),
+                address=addr[0],
+                port=port,
+                last_seen=now,
+            )
+
+        active_hosts = [
+            host
+            for host in self._hosts.values()
+            if now - host.last_seen <= DISCOVERY_HOST_MAX_AGE
+        ]
+        self._hosts = {(host.address, host.port): host for host in active_hosts}
+        return sorted(active_hosts, key=lambda host: (host.host_name.lower(), host.address))
+
+
+def _candidate_broadcast_addresses() -> list[str]:
+    addresses = ["255.255.255.255"]
+    local_ip = get_local_ip()
+    parts = local_ip.split(".")
+    if len(parts) == 4 and local_ip != "127.0.0.1":
+        subnet_broadcast = ".".join(parts[:3] + ["255"])
+        if subnet_broadcast not in addresses:
+            addresses.append(subnet_broadcast)
+    return addresses
 
 
 def get_local_ip() -> str:
-    """Get local IP address for hosting."""
+    """Best-effort local IPv4 address for LAN hosting."""
+    sock: Optional[socket.socket] = None
     try:
-        # Create a socket to determine local IP
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
-    except:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
         return "127.0.0.1"
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except OSError:
+                pass
