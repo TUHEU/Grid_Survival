@@ -457,6 +457,8 @@ class GameManager:
         player.z_velocity = 0.0
         player.on_ground = True
         player.velocity.update(0, 0)
+        if hasattr(player, "_death_fade_alpha"):
+            player._death_fade_alpha = 255
         if hasattr(player, "_set_state"):
             player._set_state("idle", player.facing)
         return True

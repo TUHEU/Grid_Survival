@@ -107,6 +107,7 @@ class Player:
         self._status_flash_timer = 0.0
         self._immune_to_hazards = False
         self._power_alpha = 255
+        self._death_fade_alpha = 255
         self._active_orb_label: str | None = None
         self._active_orb_timer = 0.0
         self._active_orb_indefinite = False
@@ -275,11 +276,14 @@ class Player:
         self.drowning = False
         self.jumping = False
         self.velocity.update(0, 0)
+        self._power_alpha = 255
+        self._death_fade_alpha = 255
         self.current_animation = self.animations["death"][self.facing]
         self.current_animation.reset()
 
     def _update_death(self, dt: float):
         """Update death animation."""
+        self._death_fade_alpha = max(0, int(self._death_fade_alpha - 220 * dt))
         if not self.current_animation.finished:
             self.current_animation.update(dt)
 
@@ -422,6 +426,11 @@ class Player:
         self._collision_outline = self._collision_mask.outline()
 
     def draw(self, surface: pygame.Surface):
+        death_alpha = self._death_fade_alpha if self.state == "death" else 255
+        render_alpha = min(self._power_alpha, death_alpha)
+        if render_alpha <= 0:
+            return
+
         # Draw Shadow at ground position
         if self.jumping and self.z > 0:
             shadow_rect = pygame.Rect(0, 0, self.rect.width * 0.6, self.rect.height * 0.2)
@@ -431,23 +440,25 @@ class Player:
             shadow_w = int(shadow_rect.width * scale)
             shadow_h = int(shadow_rect.height * scale)
             shadow_s = pygame.Surface((shadow_w, shadow_h), pygame.SRCALPHA)
-            pygame.draw.ellipse(shadow_s, (0, 0, 0, 100), shadow_s.get_rect())
+            shadow_alpha = int(100 * (death_alpha / 255))
+            pygame.draw.ellipse(shadow_s, (0, 0, 0, shadow_alpha), shadow_s.get_rect())
             surface.blit(shadow_s, (shadow_rect.centerx - shadow_w//2, shadow_rect.centery - shadow_h//2))
 
         # Apply Z-offset to draw position
         draw_rect = self.rect.copy()
         draw_rect.y -= round(self.z)
         frame = self.current_animation.image
-        if self._power_alpha != 255:
+        if render_alpha != 255:
             frame = frame.copy()
-            frame.set_alpha(self._power_alpha)
+            frame.set_alpha(render_alpha)
         surface.blit(frame, draw_rect.topleft)
 
+        death_opacity = death_alpha / 255.0
         if self._shield_timer > 0:
-            self._draw_shield_overlay(surface, draw_rect)
+            self._draw_shield_overlay(surface, draw_rect, death_opacity)
         if self.is_frozen():
-            self._draw_freeze_overlay(surface, draw_rect)
-        if self.power_orb_charges > 0:
+            self._draw_freeze_overlay(surface, draw_rect, death_opacity)
+        if self.power_orb_charges > 0 and self.state != "death":
             self._draw_power_orb_icons(surface)
 
         if DEBUG_VISUALS_ENABLED and DEBUG_DRAW_PLAYER_FOOTBOX:
@@ -498,6 +509,7 @@ class Player:
         self._status_flash_timer = 0.0
         self._immune_to_hazards = False
         self._power_alpha = 255
+        self._death_fade_alpha = 255
         self.clear_active_orb()
         self._refresh_collision_shape(force=True)
 
@@ -618,6 +630,8 @@ class Player:
         self.drown_surface_y = surface_y
         self.position.y = surface_y - self.rect.height * 0.25
         self._set_state("death", self.facing)
+        self._power_alpha = 255
+        self._death_fade_alpha = 255
         if draw_behind is not None:
             self.fall_draw_behind = draw_behind
 
@@ -638,7 +652,7 @@ class Player:
             self.position.y = max_center_y
             self.velocity.y = 0.0
 
-    def _draw_shield_overlay(self, surface: pygame.Surface, draw_rect: pygame.Rect):
+    def _draw_shield_overlay(self, surface: pygame.Surface, draw_rect: pygame.Rect, opacity_scale: float = 1.0):
         warn = self._shield_timer <= self._shield_warning_threshold
         base_color = (70, 200, 240) if not warn else (230, 180, 90)
         texture = _get_shield_effect_surface()
@@ -655,6 +669,7 @@ class Player:
             tint.fill((*base_color, 255))
             effect.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
             alpha = 190 if not warn else 150
+            alpha = int(alpha * opacity_scale)
             effect.set_alpha(alpha)
             effect_rect = effect.get_rect(center=draw_rect.center)
             surface.blit(effect, effect_rect)
@@ -663,14 +678,31 @@ class Player:
         radius = max(draw_rect.width, draw_rect.height) // 2 + 8
         pulse = (int(self._status_flash_timer * 8) % 2 == 0)
         alpha = 40 if not warn else (20 if pulse else 70)
+        alpha = int(alpha * opacity_scale)
         shield_surf = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
         pygame.draw.circle(shield_surf, (*base_color, alpha), (radius + 2, radius + 2), radius, 4)
         surface.blit(shield_surf, (draw_rect.centerx - radius - 2, draw_rect.centery - radius - 2))
 
-    def _draw_freeze_overlay(self, surface: pygame.Surface, draw_rect: pygame.Rect):
+    def _draw_freeze_overlay(self, surface: pygame.Surface, draw_rect: pygame.Rect, opacity_scale: float = 1.0):
+        self._refresh_collision_shape()
+        if len(self._collision_outline) < 2:
+            return
+
         frost = pygame.Surface(draw_rect.size, pygame.SRCALPHA)
-        alpha = 90 if int(self._status_flash_timer * 5) % 2 == 0 else 130
-        frost.fill((150, 200, 255, alpha))
+        pulse = 0.5 + 0.5 * math.sin(self._status_flash_timer * 8.0)
+        line_alpha = int((90 + 75 * pulse) * opacity_scale)
+        spark_alpha = int((150 + 70 * (1.0 - pulse)) * opacity_scale)
+
+        outline_points = self._collision_outline
+        pygame.draw.lines(frost, (150, 200, 255, line_alpha), True, outline_points, 2)
+        pygame.draw.lines(frost, (245, 250, 255, int(line_alpha * 0.65)), True, outline_points, 1)
+
+        step = max(1, len(outline_points) // 8)
+        for idx in range(0, len(outline_points), step):
+            x, y = outline_points[idx]
+            radius = 2 + ((idx // step) % 2)
+            pygame.draw.circle(frost, (225, 245, 255, spark_alpha), (x, y), radius)
+
         surface.blit(frost, draw_rect.topleft)
 
     def _draw_power_orb_icons(self, surface: pygame.Surface):
