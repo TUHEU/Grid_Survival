@@ -4,6 +4,11 @@ import pygame
 
 from audio import get_audio
 from game import GameManager
+<<<<<<< HEAD
+=======
+from network import NetworkHost, NetworkClient, get_local_ip
+from lan_prompts import prompt_host_or_join, prompt_ip_entry, toast_message
+>>>>>>> main
 from host_waiting_screen import host_waiting_screen
 from lan_prompts import draw_lan_backdrop, prompt_host_or_join, prompt_ip_entry
 from network import NetworkClient, NetworkHost, get_local_ip
@@ -152,11 +157,15 @@ def main():
 
                 if choice == "host":
                     network = NetworkHost()
-                    if not network.start_hosting():
-                        network.disconnect()
+                    hosting = network.start_hosting()
+                    if not hosting:
+                        toast_message(screen, clock, "Hosting failed.")
                         continue
-                    if not host_waiting_screen(screen, clock, get_local_ip(), network):
-                        network.disconnect()
+                    host_ip = get_local_ip()
+                    # Show waiting/connected screen
+                    ok = host_waiting_screen(screen, clock, host_ip, network)
+                    if not ok:
+                        toast_message(screen, clock, "Hosting cancelled.")
                         continue
                     local_player_index = 0
                 else:
@@ -164,8 +173,9 @@ def main():
                     if not ip:
                         continue
                     network = NetworkClient()
-                    if not network.connect_to_host(ip):
-                        network.disconnect()
+                    connected = network.connect_to_host(ip)
+                    if not connected:
+                        toast_message(screen, clock, "Connection failed.")
                         continue
                     local_player_index = 1
 

@@ -2,13 +2,14 @@
 Magic Orb System for Grid Survival.
 
 Magic orbs appear on the arena and grant bonuses when a player walks over them.
-Five types exist, each with a distinct colour, icon, and effect:
+Six types exist, each with a distinct colour, icon, and effect:
 
   SPEED   (cyan)   — +50% movement speed for 8 s
   SHIELD  (gold)   — absorbs the next hazard hit
   FREEZE  (blue)   — freeze all tiles and hazards for 3 s (same as Wizard power)
   POWER   (purple) — immediately recharge all power cooldowns
   BOMB    (red)    — smash every WARNING tile on the map instantly
+    PHASE   (mint)   — walk over missing tiles for 10 s
 
 The OrbManager spawns orbs on random walkable positions, tracks collection,
 and provides the integration hooks that GameManager calls each frame.
@@ -28,6 +29,7 @@ from settings import (
     ORB_LIFETIME,
     ORB_SHIELD_DURATION,
     ORB_FREEZE_DURATION,
+    ORB_VOID_WALK_DURATION,
     POWER_ORBS_REQUIRED,
     ORB_ICON_PATHS,
 )
@@ -46,6 +48,7 @@ class OrbType(Enum):
     POWER  = "power"
     BOMB   = "bomb"
     LIFE   = "life"
+    PHASE  = "phase"
 
 
 # Visual config per type  (color, label, glow_color)
@@ -56,6 +59,7 @@ _ORB_VISUALS: dict[OrbType, tuple] = {
     OrbType.POWER:  ((200, 80,  255), (230, 140, 255)),
     OrbType.BOMB:   ((255, 70,  50),  (255, 140, 80)),
     OrbType.LIFE:   ((255, 105, 180), (255, 182, 193)),  # Pink heart
+    OrbType.PHASE:  ((120, 255, 190), (190, 255, 230)),
 }
 
 _ORB_IMAGES: dict[OrbType, pygame.Surface | None] = {}
@@ -245,6 +249,13 @@ def apply_orb_effect(orb_type: OrbType, collector, game) -> str:
                 return "LIFE  Extra life granted!"
         return "LIFE  Extra life granted!"
 
+    elif orb_type == OrbType.PHASE:
+        if hasattr(collector, "enable_void_walk"):
+            collector.enable_void_walk(ORB_VOID_WALK_DURATION)
+        if hasattr(collector, "set_active_orb"):
+            collector.set_active_orb("Void Walk", ORB_VOID_WALK_DURATION)
+        return f"VOID WALK {int(ORB_VOID_WALK_DURATION)}s"
+
     return ""
 
 
@@ -274,7 +285,8 @@ class OrbManager:
         [OrbType.FREEZE] * 2 +
         [OrbType.POWER]  * 2 +
         [OrbType.BOMB]   * 1 +
-        [OrbType.LIFE]   * 2  # Life orb - heart-shaped pink heart
+        [OrbType.LIFE]   * 2 +  # Life orb - heart-shaped pink heart
+        [OrbType.PHASE]  * 5
     )
 
     def __init__(self, level_number: int = 1):

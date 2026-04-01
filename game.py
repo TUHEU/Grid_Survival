@@ -113,8 +113,7 @@ class GameManager:
         self._spawn_adjusted = False
         self._spawn_rescue_window = 1.0
         self._time_since_start = 0.0
-        self._pending_ai_spawn = False
-
+        self._pending_initial_restart = (self.game_mode == MODE_VS_COMPUTER and USE_AI_PLAYER)
         if self.game_mode == MODE_VS_COMPUTER:
             primary_char = self._character_choice(0)
             self.players.append(
@@ -124,7 +123,8 @@ class GameManager:
                 )
             )
             if USE_AI_PLAYER:
-                self._pending_ai_spawn = True
+                ai_pos = next(spawn_positions, PLAYER_START_POS)
+                self.players.append(AIPlayer(position=ai_pos))
         elif self.game_mode == MODE_LOCAL_MULTIPLAYER:
             player1_controls = {
                 'up': pygame.K_w,
@@ -193,7 +193,7 @@ class GameManager:
             )
 
         self._ensure_players_on_walkable_surface()
-        self._maybe_spawn_pending_ai(initial=True)
+        self._force_safe_spawns()
         self._configure_powers_for_players()
 
         self.hud.set_player_info(player_name, len(self.players), len(self.players))
@@ -210,6 +210,8 @@ class GameManager:
                 if event.button == 1:  # Left click
                     if self.hud.mute_rect and self.hud.mute_rect.collidepoint(event.pos):
                         self.audio.toggle_mute()
+                    elif self._handle_ninja_target_click(event.pos):
+                        continue
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_l and not self.is_network_game:
                     for player in self.players:
@@ -232,6 +234,7 @@ class GameManager:
             self.running = False
             return
 
+<<<<<<< HEAD
         if self.is_network_game:
             if not self.network or not self.network.connected:
                 self.running = False
@@ -253,6 +256,13 @@ class GameManager:
                 self._update_client_network_game(dt)
                 self._pending_power_press = False
                 return
+=======
+        # Hidden first-frame restart to ensure AI is visible on first launch
+        if self._pending_initial_restart:
+            self._pending_initial_restart = False
+            self._restart_game()
+            return
+>>>>>>> main
 
         if self.game_over:
             if self.elimination_screen:
@@ -603,29 +613,7 @@ class GameManager:
                 base_occupied.add(target)
 
     def _maybe_spawn_pending_ai(self, initial: bool = False):
-        if not self._pending_ai_spawn:
-            return
-        if not self.walkable_mask:
-            return
-        human = next((p for p in self.players if not getattr(p, "is_ai", False)), None)
-        if human is None:
-            return
-
-        ai_player = AIPlayer(position=human.position)
-        occupied = {
-            (int(round(p.position.x)), int(round(p.position.y)))
-            for p in self.players
-        }
-        origin = pygame.Vector2(round(human.position.x), round(human.position.y))
-        target = self._find_valid_fallback(ai_player, occupied, origin)
-        self._apply_spawn_position(ai_player, target)
-        self.players.append(ai_player)
-        self._configure_power_for_player(ai_player, len(self.players) - 1)
-        self._pending_ai_spawn = False
-        self._align_ai_spawn_with_human()
-        if not initial:
-            alive_count = len(self.players) - len(self.eliminated_players)
-            self.hud.set_player_info(self.player_name, alive_count, len(self.players))
+        return
 
     def _rescue_player_to_safe_tile(self, player) -> bool:
         if not self.walkable_mask:
@@ -650,6 +638,8 @@ class GameManager:
         player.z_velocity = 0.0
         player.on_ground = True
         player.velocity.update(0, 0)
+        if hasattr(player, "_death_fade_alpha"):
+            player._death_fade_alpha = 255
         if hasattr(player, "_set_state"):
             player._set_state("idle", player.facing)
         return True
@@ -750,7 +740,6 @@ class GameManager:
             self.elimination_screen = EliminationScreen(
                 self.player_name,
                 self.hud.survival_time,
-                self.hud.score,
                 "eliminated"
             )
             self.elimination_screen.show()
@@ -777,8 +766,32 @@ class GameManager:
                 player.power.reset()
 
         self._ensure_players_on_walkable_surface()
+        self._force_safe_spawns()
         self._configure_powers_for_players()
         self.hud.set_player_info(self.player_name, len(self.players), len(self.players))
+
+    def _force_safe_spawns(self):
+        """Clamp every player to a valid walkable tile and clear fall/drown flags."""
+        if not self.walkable_mask:
+            return
+        center = self._walkable_center()
+        safe = (int(round(center.x)), int(round(center.y)))
+        for player in self.players:
+            pos_tuple = (int(round(player.position.x)), int(round(player.position.y)))
+            if not self._is_spawn_position_valid(player, pos_tuple):
+                self._apply_spawn_position(player, safe)
+            player.falling = False
+            player.fall_velocity = 0.0
+            player.drowning = False
+            player.drown_animation_done = False
+            player.drown_surface_y = None
+            player.jumping = False
+            player.z = 0.0
+            player.z_velocity = 0.0
+            player.on_ground = True
+            player.velocity.update(0, 0)
+            if hasattr(player, "_set_state"):
+                player._set_state("idle", player.facing)
 
     def _draw_tmx_map_with_tiles(self):
         """Draw TMX map layers, letting missing tiles reveal the background."""
@@ -830,8 +843,24 @@ class GameManager:
             if player in self.eliminated_players:
                 continue
             if getattr(player, "power_key", None) == key:
-                if player.try_use_power():
+                power = getattr(player, "power", None)
+                if power and hasattr(power, "blocks_player_motion") and power.blocks_player_motion():
+                    confirm = getattr(power, "confirm_target_selection", None)
+                    if callable(confirm) and confirm(self):
+                        break
                     break
+                if player.try_use_power(self):
+                    break
+
+    def _handle_ninja_target_click(self, pos) -> bool:
+        for player in self.players:
+            if player in self.eliminated_players:
+                continue
+            power = getattr(player, "power", None)
+            handler = getattr(power, "handle_target_selection", None)
+            if callable(handler) and handler(self, pos):
+                return True
+        return False
 
     def _initial_spawns(self, slot_count: int) -> list[tuple[int, int]]:
         # Hardcoded grid positions on the platform (10x6 platform at x=7, y=9)

@@ -1,6 +1,6 @@
 """
 UI and HUD system for Grid Survival.
-Displays score, timer, player status, and elimination screens.
+Displays timer, player status, and elimination screens.
 Redesigned with polished panels, arcade fonts, urgency styling, and animations.
 """
 
@@ -19,18 +19,14 @@ from settings import (
     HUD_PANEL_BORDER_WIDTH,
     HUD_PANEL_PADDING_H,
     HUD_PANEL_PADDING_V,
-    HUD_SCORE_BORDER_COLOR,
     HUD_TIMER_BORDER_COLOR,
     HUD_ALIVE_BORDER_COLOR_ALL,
     HUD_ALIVE_BORDER_COLOR_ONE,
     HUD_ALIVE_BORDER_COLOR_LAST,
     HUD_TIMER_URGENT_COLOR,
     HUD_VALUE_COLOR,
-    HUD_LABEL_COLOR_SCORE,
     HUD_LABEL_COLOR_TIMER,
     HUD_LABEL_COLOR_ALIVE,
-    SCORE_ANIM_SCALE_UP_DURATION,
-    SCORE_ANIM_SCALE_DOWN_DURATION,
 )
 from playercard import PlayerCardRenderer
 
@@ -95,17 +91,9 @@ class GameHUD:
         self._player_cards = PlayerCardRenderer(self._font_card_small, _draw_panel)
 
         self.survival_time = 0.0
-        self.score = 0
-        self._prev_score = 0
         self.player_name = "Player"
         self.players_alive = 1
         self.total_players = 1
-
-        # Score animation state
-        self._score_anim_timer = 0.0
-        self._score_anim_phase = "idle"   # "up" | "down" | "idle"
-        self._score_scale = 1.0
-        self._score_flash = False
 
         # Timer urgency pulse
         self._pulse_timer = 0.0
@@ -115,43 +103,9 @@ class GameHUD:
     def update(self, dt: float):
         """Update HUD state."""
         self.survival_time += dt
-        new_score = int(self.survival_time * 10)
-
-        if new_score != self.score:
-            self.score = new_score
-            if new_score > self._prev_score:
-                self._start_score_anim()
-            self._prev_score = new_score
-
-        # Update score animation
-        self._update_score_anim(dt)
 
         # Timer urgency pulse
         self._pulse_timer += dt
-
-    def _start_score_anim(self):
-        self._score_anim_phase = "up"
-        self._score_anim_timer = 0.0
-        self._score_flash = True
-
-    def _update_score_anim(self, dt: float):
-        if self._score_anim_phase == "up":
-            self._score_anim_timer += dt
-            t = min(1.0, self._score_anim_timer / SCORE_ANIM_SCALE_UP_DURATION)
-            self._score_scale = 1.0 + 0.2 * t
-            if self._score_anim_timer >= SCORE_ANIM_SCALE_UP_DURATION:
-                self._score_anim_phase = "down"
-                self._score_anim_timer = 0.0
-                self._score_flash = False
-        elif self._score_anim_phase == "down":
-            self._score_anim_timer += dt
-            t = min(1.0, self._score_anim_timer / SCORE_ANIM_SCALE_DOWN_DURATION)
-            self._score_scale = 1.2 - 0.2 * t
-            if self._score_anim_timer >= SCORE_ANIM_SCALE_DOWN_DURATION:
-                self._score_anim_phase = "idle"
-                self._score_scale = 1.0
-        else:
-            self._score_scale = 1.0
 
     def _alive_color(self) -> tuple:
         """Return the alive counter color based on remaining players."""
@@ -176,7 +130,6 @@ class GameHUD:
 
     def draw(self, surface: pygame.Surface, players: List, is_muted: bool = False):
         """Draw HUD elements."""
-        self._draw_score_panel(surface)
         self._draw_timer_panel(surface)
         self._draw_mute_button(surface, is_muted)
         self._draw_player_cards(surface, players)
@@ -194,9 +147,8 @@ class GameHUD:
         panel_w = label_surf.get_width() + HUD_PANEL_PADDING_H * 2
         panel_h = label_surf.get_height() + HUD_PANEL_PADDING_V * 2
         
-        # Position below Score panel (Score is at 20, 20 with height ~80-100)
-        # Let's put it at (20, 110)
-        self.mute_rect = pygame.Rect(20, 110, panel_w, panel_h)
+        # Keep the audio control out of the top edge so it stays clear of the player cards.
+        self.mute_rect = pygame.Rect(20, WINDOW_SIZE[1] - panel_h - 20, panel_w, panel_h)
 
         _draw_panel(surface, self.mute_rect, HUD_PANEL_BG, color,
                     HUD_PANEL_BORDER_WIDTH, 8, glow=False)
@@ -204,42 +156,6 @@ class GameHUD:
         lx = self.mute_rect.centerx - label_surf.get_width() // 2
         ly = self.mute_rect.centery - label_surf.get_height() // 2
         surface.blit(label_surf, (lx, ly))
-
-    def _draw_score_panel(self, surface: pygame.Surface):
-        """Score panel — top-left."""
-        label_surf = self._font_label.render("SCORE", True, HUD_LABEL_COLOR_SCORE)
-
-        # Animated score value
-        score_str = str(self.score)
-        if self._score_flash:
-            value_color = HUD_SCORE_BORDER_COLOR  # GOLD flash
-        else:
-            value_color = HUD_VALUE_COLOR
-
-        value_surf = self._font_value.render(score_str, True, value_color)
-
-        # Scale the value surface
-        if self._score_scale != 1.0:
-            w = max(1, int(value_surf.get_width() * self._score_scale))
-            h = max(1, int(value_surf.get_height() * self._score_scale))
-            value_surf = pygame.transform.smoothscale(value_surf, (w, h))
-
-        panel_w = max(label_surf.get_width(), value_surf.get_width()) + HUD_PANEL_PADDING_H * 2
-        panel_h = label_surf.get_height() + value_surf.get_height() + HUD_PANEL_PADDING_V * 3
-        panel_rect = pygame.Rect(20, 20, panel_w, panel_h)
-
-        _draw_panel(surface, panel_rect, HUD_PANEL_BG, HUD_SCORE_BORDER_COLOR,
-                    HUD_PANEL_BORDER_WIDTH, HUD_PANEL_RADIUS, glow=True)
-
-        # Label centered at top of panel
-        lx = panel_rect.centerx - label_surf.get_width() // 2
-        ly = panel_rect.top + HUD_PANEL_PADDING_V
-        surface.blit(label_surf, (lx, ly))
-
-        # Value centered below label
-        vx = panel_rect.centerx - value_surf.get_width() // 2
-        vy = ly + label_surf.get_height() + HUD_PANEL_PADDING_V
-        surface.blit(value_surf, (vx, vy))
 
     def _draw_timer_panel(self, surface: pygame.Surface):
         """Timer panel — top-center."""
@@ -283,7 +199,7 @@ class GameHUD:
         surface.blit(value_surf, (vx, vy))
 
     def _draw_alive_panel(self, surface: pygame.Surface):
-        """Alive counter panel — top-right."""
+        """Alive counter panel — bottom-right."""
         alive_color = self._alive_color()
 
         # Last player: slow pulse
@@ -299,8 +215,9 @@ class GameHUD:
 
         panel_w = max(label_surf.get_width(), value_surf.get_width()) + HUD_PANEL_PADDING_H * 2
         panel_h = label_surf.get_height() + value_surf.get_height() + HUD_PANEL_PADDING_V * 3
-        panel_rect = pygame.Rect(0, 20, panel_w, panel_h)
+        panel_rect = pygame.Rect(0, 0, panel_w, panel_h)
         panel_rect.right = WINDOW_SIZE[0] - 20
+        panel_rect.bottom = WINDOW_SIZE[1] - 20
 
         _draw_panel(surface, panel_rect, HUD_PANEL_BG, border_color,
                     HUD_PANEL_BORDER_WIDTH, HUD_PANEL_RADIUS, glow=True)
@@ -319,11 +236,6 @@ class GameHUD:
     def reset(self):
         """Reset HUD state."""
         self.survival_time = 0.0
-        self.score = 0
-        self._prev_score = 0
-        self._score_anim_phase = "idle"
-        self._score_scale = 1.0
-        self._score_flash = False
         self._pulse_timer = 0.0
 
     def set_player_info(self, name: str, alive: int, total: int):
@@ -361,10 +273,9 @@ class GameHUD:
 class EliminationScreen:
     """Screen shown when player is eliminated."""
 
-    def __init__(self, player_name: str, survival_time: float, score: int, reason: str = "eliminated"):
+    def __init__(self, player_name: str, survival_time: float, reason: str = "eliminated"):
         self.player_name = player_name
         self.survival_time = survival_time
-        self.score = score
         self.reason = reason
 
         # Use the same HUD font hierarchy — fits within screen width
@@ -462,12 +373,6 @@ class EliminationScreen:
         time_surf.set_alpha(text_alpha)
         surface.blit(time_surf, time_surf.get_rect(center=(cx, panel_rect.top + 115)))
 
-        # Final score
-        score_text = f"Final Score:  {self.score}"
-        score_surf = self.font_medium.render(score_text, True, (255, 210, 80))
-        score_surf.set_alpha(text_alpha)
-        surface.blit(score_surf, score_surf.get_rect(center=(cx, panel_rect.top + 155)))
-
         # Restart prompt (blinks after fully faded in)
         if self.alpha >= 220:
             blink_alpha = int(120 + 135 * abs(math.sin(self._time * math.pi * 1.5)))
@@ -486,10 +391,9 @@ class EliminationScreen:
 class VictoryScreen:
     """Screen shown when player wins (survives longest in multiplayer)."""
 
-    def __init__(self, player_name: str, survival_time: float, score: int):
+    def __init__(self, player_name: str, survival_time: float):
         self.player_name = player_name
         self.survival_time = survival_time
-        self.score = score
 
         self.font_title = _load_font(FONT_PATH_HUD, 42, bold=True)
         self.font_large = _load_font(FONT_PATH_HUD, 28, bold=True)
@@ -571,11 +475,6 @@ class VictoryScreen:
         time_surf = self.font_medium.render(time_text, True, (180, 200, 255))
         time_surf.set_alpha(text_alpha)
         surface.blit(time_surf, time_surf.get_rect(center=(cx, panel_rect.top + 115)))
-
-        score_text = f"Final Score:  {self.score}"
-        score_surf = self.font_medium.render(score_text, True, (255, 210, 80))
-        score_surf.set_alpha(text_alpha)
-        surface.blit(score_surf, score_surf.get_rect(center=(cx, panel_rect.top + 155)))
 
         if self.alpha >= 220:
             blink_alpha = int(120 + 135 * abs(math.sin(self._time * math.pi * 1.5)))
