@@ -680,6 +680,18 @@ class GameManager:
         if self._can_block_elimination(player, reason):
             print(f"Elimination blocked by shield/immunity (Reason: {reason})")
             return
+        # Check if player has an extra life to revive
+        if hasattr(player, 'has_extra_life') and player.has_extra_life():
+            if player.use_life():
+                # Remove from eliminated list if they were in it
+                if player in self.eliminated_players:
+                    self.eliminated_players.remove(player)
+                # Reset eliminated flag
+                player._eliminated = False
+                # Revive the player at a safe position
+                self._rescue_player_to_safe_tile(player)
+                print(f"Player revived with extra life! (Reason: {reason})")
+                return
         if player not in self.eliminated_players:
             self.eliminated_players.append(player)
             print(f"Player eliminated: {reason}")
