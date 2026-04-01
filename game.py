@@ -529,7 +529,6 @@ class GameManager:
             self.elimination_screen = EliminationScreen(
                 self.player_name,
                 self.hud.survival_time,
-                self.hud.score,
                 "eliminated"
             )
             self.elimination_screen.show()
