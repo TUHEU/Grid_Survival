@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 import pygame
 
@@ -10,7 +11,34 @@ BACKGROUND_PATH = ASSETS_DIR / "Background" / "background.jpg"
 CHARACTER_BASE = ASSETS_DIR / "Characters" / "Caveman"
 PLAYER_PORTRAIT_DIR = ASSETS_DIR / "Characters" / "portrait"
 
-WINDOW_SIZE = (1280, 720)
+def _detect_display_size() -> tuple[int, int]:
+    fallback_size = (1280, 720)
+
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except (AttributeError, OSError):
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except AttributeError:
+                    pass
+
+            user32 = ctypes.windll.user32
+            width = int(user32.GetSystemMetrics(0))
+            height = int(user32.GetSystemMetrics(1))
+            if width > 0 and height > 0:
+                return (width, height)
+        except Exception:
+            pass
+
+    return fallback_size
+
+
+WINDOW_SIZE = _detect_display_size()
+WINDOW_FLAGS = pygame.FULLSCREEN
 WINDOW_TITLE = "GRID SURVIVAL"
 
 # Define Color Palette
@@ -146,6 +174,7 @@ ORB_ICON_PATHS = {
 	"freeze": str(ASSETS_DIR / "orbs" / "freeze.png"),
 	"power": str(ASSETS_DIR / "orbs" / "power.png"),
 	"bomb": str(ASSETS_DIR / "orbs" / "bomb.png"),
+	"life": str(ASSETS_DIR / "orbs" / "life.png"),
 	"phase": str(ASSETS_DIR / "orbs" / "phase.png"),
 }
 SHIELD_EFFECT_PATH = ASSETS_DIR / "effects" / "shield.png"

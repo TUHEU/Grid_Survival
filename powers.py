@@ -1103,6 +1103,122 @@ class ArcherPower(CharacterPower):
             surface.blit(arrow_surf, (0, 0))
 
 
+def snapshot_power_state(power: CharacterPower | None) -> dict | None:
+    """Serialize just enough power state for LAN snapshot playback."""
+    if power is None:
+        return None
+
+    state = {
+        "type": type(power).__name__,
+        "active": bool(getattr(power, "active", False)),
+        "active_timer": float(getattr(power, "active_timer", 0.0)),
+        "cooldown_remaining": float(getattr(power, "cooldown_remaining", 0.0)),
+    }
+
+    if isinstance(power, CavemanPower):
+        state.update(
+            {
+                "shockwave_active": bool(power._shockwave_active),
+                "shockwave_ring": float(power._shockwave_ring),
+            }
+        )
+    elif isinstance(power, NinjaPower):
+        state.update(
+            {
+                "invisible": bool(power._invisible),
+                "ghost_alpha": int(power._ghost_alpha),
+                "dash_start": [float(power._dash_start.x), float(power._dash_start.y)],
+                "dash_direction": [float(power._dash_direction.x), float(power._dash_direction.y)],
+                "pending_land_fix": bool(power._pending_land_fix),
+            }
+        )
+    elif isinstance(power, WizardPower):
+        state.update({"freeze_timer": float(power._freeze_timer)})
+    elif isinstance(power, KnightPower):
+        state.update({"bashed": bool(power._bashed)})
+    elif isinstance(power, RobotPower):
+        state.update(
+            {
+                "armour_intact": bool(power._armour_intact),
+                "trail_timer": float(power._trail_timer),
+            }
+        )
+    elif isinstance(power, SamuraiPower):
+        state.update({"spin_angle": float(power._spin_angle)})
+    elif isinstance(power, ArcherPower):
+        arrows = []
+        for arrow in power._arrows:
+            pos = arrow.get("pos", pygame.Vector2())
+            direction = arrow.get("dir", pygame.Vector2())
+            arrows.append(
+                {
+                    "x": float(pos.x),
+                    "y": float(pos.y),
+                    "dx": float(direction.x),
+                    "dy": float(direction.y),
+                    "lifetime": float(arrow.get("lifetime", 0.0)),
+                }
+            )
+        state.update({"arrows": arrows})
+
+    return state
+
+
+def apply_power_state(power: CharacterPower | None, state: dict | None) -> None:
+    """Apply a LAN snapshot to an existing power instance."""
+    if power is None or not isinstance(state, dict):
+        return
+
+    power.active = bool(state.get("active", power.active))
+    power.active_timer = float(state.get("active_timer", power.active_timer))
+    power.cooldown_remaining = float(
+        state.get("cooldown_remaining", power.cooldown_remaining)
+    )
+    power._particles.clear()
+
+    if isinstance(power, CavemanPower):
+        power._shockwave_active = bool(state.get("shockwave_active", power._shockwave_active))
+        power._shockwave_ring = float(state.get("shockwave_ring", power._shockwave_ring))
+    elif isinstance(power, NinjaPower):
+        power._invisible = bool(state.get("invisible", power._invisible))
+        power._ghost_alpha = int(state.get("ghost_alpha", power._ghost_alpha))
+        dash_start = state.get("dash_start")
+        if isinstance(dash_start, list) and len(dash_start) == 2:
+            power._dash_start = pygame.Vector2(float(dash_start[0]), float(dash_start[1]))
+        dash_direction = state.get("dash_direction")
+        if isinstance(dash_direction, list) and len(dash_direction) == 2:
+            power._dash_direction = pygame.Vector2(
+                float(dash_direction[0]),
+                float(dash_direction[1]),
+            )
+        power._pending_land_fix = bool(state.get("pending_land_fix", power._pending_land_fix))
+    elif isinstance(power, WizardPower):
+        power._freeze_timer = float(state.get("freeze_timer", power._freeze_timer))
+    elif isinstance(power, KnightPower):
+        power._bashed = bool(state.get("bashed", power._bashed))
+    elif isinstance(power, RobotPower):
+        power._armour_intact = bool(state.get("armour_intact", power._armour_intact))
+        power._trail_timer = float(state.get("trail_timer", power._trail_timer))
+    elif isinstance(power, SamuraiPower):
+        power._spin_angle = float(state.get("spin_angle", power._spin_angle))
+    elif isinstance(power, ArcherPower):
+        arrows = []
+        for arrow in state.get("arrows", []) or []:
+            if not isinstance(arrow, dict):
+                continue
+            arrows.append(
+                {
+                    "pos": pygame.Vector2(float(arrow.get("x", 0.0)), float(arrow.get("y", 0.0))),
+                    "dir": pygame.Vector2(
+                        float(arrow.get("dx", 0.0)),
+                        float(arrow.get("dy", 0.0)),
+                    ),
+                    "lifetime": float(arrow.get("lifetime", 0.0)),
+                }
+            )
+        power._arrows = arrows
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry: maps character name keywords → power class
 # ─────────────────────────────────────────────────────────────────────────────

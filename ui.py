@@ -244,6 +244,27 @@ class GameHUD:
         self.players_alive = alive
         self.total_players = total
 
+    def snapshot_state(self) -> dict:
+        """Serialize HUD values for LAN clients."""
+        return {
+            "survival_time": float(self.survival_time),
+            "score": int(self.score),
+            "player_name": self.player_name,
+            "players_alive": int(self.players_alive),
+            "total_players": int(self.total_players),
+        }
+
+    def apply_snapshot(self, snapshot: dict | None):
+        """Apply host HUD values on the LAN client."""
+        if not isinstance(snapshot, dict):
+            return
+        self.survival_time = float(snapshot.get("survival_time", self.survival_time))
+        self.score = int(snapshot.get("score", self.score))
+        self._prev_score = self.score
+        self.player_name = str(snapshot.get("player_name", self.player_name))
+        self.players_alive = int(snapshot.get("players_alive", self.players_alive))
+        self.total_players = int(snapshot.get("total_players", self.total_players))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EliminationScreen

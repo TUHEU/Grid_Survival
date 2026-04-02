@@ -47,6 +47,7 @@ class OrbType(Enum):
     FREEZE = "freeze"
     POWER  = "power"
     BOMB   = "bomb"
+    LIFE   = "life"
     PHASE  = "phase"
 
 
@@ -57,6 +58,7 @@ _ORB_VISUALS: dict[OrbType, tuple] = {
     OrbType.FREEZE: ((80,  140, 255), (140, 180, 255)),
     OrbType.POWER:  ((200, 80,  255), (230, 140, 255)),
     OrbType.BOMB:   ((255, 70,  50),  (255, 140, 80)),
+    OrbType.LIFE:   ((255, 105, 180), (255, 182, 193)),  # Pink heart
     OrbType.PHASE:  ((120, 255, 190), (190, 255, 230)),
 }
 
@@ -225,6 +227,28 @@ def apply_orb_effect(orb_type: OrbType, collector, game) -> str:
             collector.set_active_orb("Bomb Detonation", 1.5)
         return f"BOMB  {smashed} tiles destroyed"
 
+    elif orb_type == OrbType.LIFE:
+        # Grant a revive or extra life
+        is_eliminated = getattr(collector, '_eliminated', False)
+        if is_eliminated:
+            # Revive immediately if eliminated
+            if collector in game.eliminated_players:
+                game.eliminated_players.remove(collector)
+            collector._eliminated = False
+            game._rescue_player_to_safe_tile(collector)
+            if hasattr(collector, "set_active_orb"):
+                collector.set_active_orb("Revived", None)
+            print("Player revived by LIFE orb!")
+            return "LIFE  Revived!"
+        else:
+            # Grant extra life for future use
+            if hasattr(collector, "add_life"):
+                collector.add_life()
+                if hasattr(collector, "set_active_orb"):
+                    collector.set_active_orb("Extra Life", None)
+                return "LIFE  Extra life granted!"
+        return "LIFE  Extra life granted!"
+
     elif orb_type == OrbType.PHASE:
         if hasattr(collector, "enable_void_walk"):
             collector.enable_void_walk(ORB_VOID_WALK_DURATION)
@@ -261,6 +285,7 @@ class OrbManager:
         [OrbType.FREEZE] * 2 +
         [OrbType.POWER]  * 2 +
         [OrbType.BOMB]   * 1 +
+        [OrbType.LIFE]   * 2 +  # Life orb - heart-shaped pink heart
         [OrbType.PHASE]  * 5
     )
 
@@ -286,12 +311,15 @@ class OrbManager:
 
         # Check collection for every active player
         for player in players:
-            if getattr(player, '_eliminated', False):
-                continue
+            # Allow LIFE orb collection even for eliminated players (they might be about to be eliminated)
+            is_eliminated = getattr(player, '_eliminated', False)
             for orb in self.orbs:
                 if not orb.active:
                     continue
                 if orb.check_collection(player):
+                    # LIFE orbs can be collected even by eliminated players (for revival)
+                    if is_eliminated and orb.orb_type != OrbType.LIFE:
+                        continue
                     orb.collect()
                     msg = apply_orb_effect(orb.orb_type, player, game)
                     self._notification = msg
@@ -397,3 +425,73 @@ class OrbManager:
         self._next_spawn = self._roll_interval()
         self._notification = ""
         self._notification_timer = 0.0
+
+    def advance_visuals(self, dt: float):
+        """Client-side visual smoothing between host snapshots."""
+        for orb in self.orbs:
+            orb._age += dt
+            orb._spin_angle = (orb._spin_angle + orb.SPIN_SPEED * dt) % 360
+            if orb._collect_flash > 0:
+                orb._collect_flash = max(0.0, orb._collect_flash - dt)
+
+    def snapshot_state(self) -> dict:
+        """Serialize active orb state for LAN snapshot sync."""
+        return {
+            "spawn_timer": float(self._spawn_timer),
+            "next_spawn": float(self._next_spawn),
+            "notification": self._notification,
+            "notification_timer": float(self._notification_timer),
+            "orbs": [
+                {
+                    "type": orb.orb_type.value,
+                    "x": float(orb.position.x),
+                    "y": float(orb.position.y),
+                    "age": float(orb._age),
+                    "alpha": int(orb._alpha),
+                    "collect_flash": float(orb._collect_flash),
+                    "lifetime": float(orb._lifetime),
+                    "active": bool(orb.active),
+                }
+                for orb in self.orbs
+            ],
+        }
+
+    def apply_snapshot(self, snapshot: dict | None) -> None:
+        """Apply a host orb snapshot on the LAN client."""
+        if not isinstance(snapshot, dict):
+            return
+
+        self._spawn_timer = float(snapshot.get("spawn_timer", self._spawn_timer))
+        self._next_spawn = float(snapshot.get("next_spawn", self._next_spawn))
+        self._notification = str(snapshot.get("notification", self._notification))
+        self._notification_timer = float(
+            snapshot.get("notification_timer", self._notification_timer)
+        )
+
+        restored: list[MagicOrb] = []
+        for orb_state in snapshot.get("orbs", []) or []:
+            if not isinstance(orb_state, dict):
+                continue
+            try:
+                orb_type = OrbType(orb_state.get("type", OrbType.SPEED.value))
+            except ValueError:
+                continue
+            orb = MagicOrb(
+                orb_type,
+                (
+                    float(orb_state.get("x", 0.0)),
+                    float(orb_state.get("y", 0.0)),
+                ),
+            )
+            orb.position = pygame.Vector2(
+                float(orb_state.get("x", orb.position.x)),
+                float(orb_state.get("y", orb.position.y)),
+            )
+            orb._spawn_pos = orb.position.copy()
+            orb._age = float(orb_state.get("age", 0.0))
+            orb._alpha = int(orb_state.get("alpha", 255))
+            orb._collect_flash = float(orb_state.get("collect_flash", 0.0))
+            orb._lifetime = float(orb_state.get("lifetime", ORB_LIFETIME))
+            orb.active = bool(orb_state.get("active", True))
+            restored.append(orb)
+        self.orbs = restored

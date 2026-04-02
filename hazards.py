@@ -370,3 +370,104 @@ class HazardManager:
         self.trap_spawn_interval = 8.0
         if self.collision_manager:
             self.collision_manager.reset_caches()
+
+    def snapshot_state(self) -> dict:
+        """Serialize host hazard state for LAN snapshot sync."""
+        return {
+            "time_elapsed": float(self.time_elapsed),
+            "bullet_spawn_timer": float(self.bullet_spawn_timer),
+            "trap_spawn_timer": float(self.trap_spawn_timer),
+            "bullet_spawn_interval": float(self.bullet_spawn_interval),
+            "trap_spawn_interval": float(self.trap_spawn_interval),
+            "bullets": [
+                {
+                    "x": float(bullet.position.x),
+                    "y": float(bullet.position.y),
+                    "dx": float(bullet.direction.x),
+                    "dy": float(bullet.direction.y),
+                    "speed": float(bullet.speed),
+                    "active": bool(bullet.active),
+                }
+                for bullet in self.bullets
+            ],
+            "traps": [
+                {
+                    "start_x": float(trap.start_pos.x),
+                    "start_y": float(trap.start_pos.y),
+                    "end_x": float(trap.end_pos.x),
+                    "end_y": float(trap.end_pos.y),
+                    "x": float(trap.position.x),
+                    "y": float(trap.position.y),
+                    "speed": float(trap.speed),
+                    "moving_to_end": bool(trap.moving_to_end),
+                    "dx": float(trap.direction.x),
+                    "dy": float(trap.direction.y),
+                    "active": bool(trap.active),
+                }
+                for trap in self.traps
+            ],
+        }
+
+    def apply_snapshot(self, snapshot: dict | None) -> None:
+        """Apply a host hazard snapshot on the LAN client."""
+        if not isinstance(snapshot, dict):
+            return
+
+        self.time_elapsed = float(snapshot.get("time_elapsed", self.time_elapsed))
+        self.bullet_spawn_timer = float(
+            snapshot.get("bullet_spawn_timer", self.bullet_spawn_timer)
+        )
+        self.trap_spawn_timer = float(snapshot.get("trap_spawn_timer", self.trap_spawn_timer))
+        self.bullet_spawn_interval = float(
+            snapshot.get("bullet_spawn_interval", self.bullet_spawn_interval)
+        )
+        self.trap_spawn_interval = float(
+            snapshot.get("trap_spawn_interval", self.trap_spawn_interval)
+        )
+
+        self.bullets = []
+        for bullet_state in snapshot.get("bullets", []) or []:
+            if not isinstance(bullet_state, dict):
+                continue
+            bullet = Bullet(
+                (
+                    float(bullet_state.get("x", 0.0)),
+                    float(bullet_state.get("y", 0.0)),
+                ),
+                pygame.Vector2(
+                    float(bullet_state.get("dx", 1.0)),
+                    float(bullet_state.get("dy", 0.0)),
+                ),
+                speed=float(bullet_state.get("speed", 300.0)),
+            )
+            bullet.active = bool(bullet_state.get("active", True))
+            self.bullets.append(bullet)
+
+        self.traps = []
+        for trap_state in snapshot.get("traps", []) or []:
+            if not isinstance(trap_state, dict):
+                continue
+            trap = MovingTrap(
+                (
+                    float(trap_state.get("start_x", 0.0)),
+                    float(trap_state.get("start_y", 0.0)),
+                ),
+                (
+                    float(trap_state.get("end_x", 0.0)),
+                    float(trap_state.get("end_y", 0.0)),
+                ),
+                speed=float(trap_state.get("speed", 150.0)),
+            )
+            trap.position = pygame.Vector2(
+                float(trap_state.get("x", trap.position.x)),
+                float(trap_state.get("y", trap.position.y)),
+            )
+            trap.moving_to_end = bool(trap_state.get("moving_to_end", trap.moving_to_end))
+            trap.direction = pygame.Vector2(
+                float(trap_state.get("dx", trap.direction.x)),
+                float(trap_state.get("dy", trap.direction.y)),
+            )
+            trap.active = bool(trap_state.get("active", True))
+            self.traps.append(trap)
+
+        self.explosions.clear()

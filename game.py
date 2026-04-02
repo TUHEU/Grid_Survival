@@ -8,7 +8,12 @@ from audio import get_audio
 from collision_manager import CollisionManager
 from player import Player
 from orbs import OrbManager
-from powers import get_power_for_character, power_key_for_player
+from powers import (
+    apply_power_state,
+    get_power_for_character,
+    power_key_for_player,
+    snapshot_power_state,
+)
 from water import AnimatedWater
 from tile_system import TMXTileManager, TileState
 from hazards import HazardManager
@@ -20,8 +25,10 @@ from settings import (
     DEBUG_WALKABLE_COLOR,
     MODE_VS_COMPUTER,
     MODE_LOCAL_MULTIPLAYER,
+    MODE_ONLINE_MULTIPLAYER,
     PLAYER_START_POS,
     TARGET_FPS,
+    WINDOW_FLAGS,
     USE_AI_PLAYER,
     WINDOW_SIZE,
     WINDOW_TITLE,
@@ -40,10 +47,11 @@ class GameManager:
         game_mode: str = MODE_VS_COMPUTER,
         selected_characters: list[str] | None = None,
         network=None,
+        local_player_index: int = 0,
     ):
         if screen is None or clock is None:
             pygame.init()
-        self.screen = screen or pygame.display.set_mode(WINDOW_SIZE)
+        self.screen = screen or pygame.display.set_mode(WINDOW_SIZE, WINDOW_FLAGS)
         pygame.display.set_caption(WINDOW_TITLE)
         self.clock = clock or pygame.time.Clock()
         self.running = True
@@ -51,6 +59,17 @@ class GameManager:
         self.game_mode = game_mode
         self.selected_characters = selected_characters or []
         self.network = network
+        self.is_network_game = (
+            self.game_mode == MODE_ONLINE_MULTIPLAYER and self.network is not None
+        )
+        self.is_network_host = bool(self.is_network_game and getattr(self.network, "is_host", False))
+        self.local_player_index = 0 if not self.is_network_game else max(0, min(1, local_player_index))
+        self.remote_player_index = 1 - self.local_player_index if self.is_network_game else None
+        self._pending_power_press = False
+        self._remote_input_state = self._empty_network_input_state()
+        self._authoritative_network_inputs = None
+        self._snapshot_send_timer = 1 / 20
+        self._snapshot_interval = 1 / 20
         
         # Load assets
         self.background_surface = load_background_surface(WINDOW_SIZE)
@@ -139,6 +158,32 @@ class GameManager:
                     character_name=self._character_choice(1),
                 )
             )
+        elif self.is_network_game:
+            local_controls = {
+                'up': pygame.K_w,
+                'down': pygame.K_s,
+                'left': pygame.K_a,
+                'right': pygame.K_d,
+                'jump': pygame.K_SPACE,
+                'power': pygame.K_q,
+            }
+            remote_controls = {
+                'up': pygame.K_UP,
+                'down': pygame.K_DOWN,
+                'left': pygame.K_LEFT,
+                'right': pygame.K_RIGHT,
+                'jump': pygame.K_RSHIFT,
+                'power': pygame.K_SLASH,
+            }
+            for idx in range(2):
+                controls = local_controls if idx == self.local_player_index else remote_controls
+                self.players.append(
+                    Player(
+                        position=next(spawn_positions, PLAYER_START_POS),
+                        controls=controls,
+                        character_name=self._character_choice(idx),
+                    )
+                )
         else:
             self.players.append(
                 Player(
@@ -168,18 +213,48 @@ class GameManager:
                     elif self._handle_ninja_target_click(event.pos):
                         continue
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_l:
+                if event.key == pygame.K_l and not self.is_network_game:
                     for player in self.players:
                         player.reset()
-                elif event.key == pygame.K_r and self.game_over:
+                elif event.key == pygame.K_r and self.game_over and not self.is_network_game:
                     self._restart_game()
                 else:
-                    self._handle_power_key(event.key)
+                    if self.is_network_game:
+                        local_player = self._local_network_player()
+                        local_power_key = getattr(local_player, "power_key", None)
+                        if local_power_key is not None and event.key == local_power_key:
+                            self._pending_power_press = True
+                    else:
+                        self._handle_power_key(event.key)
 
     def update(self, dt: float, keys):
         if keys[pygame.K_ESCAPE]:
+            if self.is_network_game and self.network and self.network.connected:
+                self.network.send_message("disconnect")
             self.running = False
             return
+
+        if self.is_network_game:
+            if not self.network or not self.network.connected:
+                self.running = False
+                return
+
+            self._process_network_messages()
+            if not self.running or not self.network.connected:
+                return
+
+            local_input = self._build_local_input_state(keys)
+            if self.is_network_host:
+                self._snapshot_send_timer += dt
+                self._authoritative_network_inputs = {
+                    self.local_player_index: local_input,
+                    self.remote_player_index: self._remote_input_state,
+                }
+            else:
+                self.network.send_message("input_state", input=local_input)
+                self._update_client_network_game(dt)
+                self._pending_power_press = False
+                return
 
         # Hidden first-frame restart to ensure AI is visible on first launch
         if self._pending_initial_restart:
@@ -209,45 +284,16 @@ class GameManager:
         self.hud.update(dt)
         for player in self.players:
             player._immune_to_hazards = False
+            player._eliminated = player in self.eliminated_players
 
-        # --- LAN Multiplayer Sync ---
-        if self.network:
-            # Assume 2 players: local is index 0, remote is index 1
-            from network import PlayerState
-            # Send local player state
-            local_player = self.players[0]
-            local_state = PlayerState(
-                x=local_player.position.x,
-                y=local_player.position.y,
-                facing=getattr(local_player, 'facing', 'down'),
-                state=getattr(local_player, 'state', 'idle'),
-                falling=getattr(local_player, 'falling', False),
-                drowning=getattr(local_player, 'drowning', False),
-                eliminated=local_player in self.eliminated_players,
-            )
-            self.network.send_player_state("0", local_state)
-            # Receive remote player state
-            messages = self.network.get_messages()
-            for msg in messages:
-                if msg.get('type') == 'player_state' and len(self.players) > 1:
-                    idx = 1 if msg['player_id'] == '1' else 0
-                    if idx < len(self.players):
-                        remote = self.players[idx]
-                        s = msg['state']
-                        remote.position.x = s['x']
-                        remote.position.y = s['y']
-                        remote.facing = s['facing']
-                        remote.state = s['state']
-                        remote.falling = s['falling']
-                        remote.drowning = s['drowning']
-                        if s['eliminated'] and remote not in self.eliminated_players:
-                            self.eliminated_players.append(remote)
+        network_inputs = getattr(self, "_authoritative_network_inputs", None)
 
         # Update players
-        for player in self.players[:]:
+        for idx, player in enumerate(self.players[:]):
             if player in self.eliminated_players:
                 if self._time_since_start <= self._spawn_rescue_window:
                     self.eliminated_players.remove(player)
+                    player._eliminated = False
                     rescued = self._rescue_player_to_safe_tile(player)
                     if rescued:
                         continue
@@ -260,6 +306,16 @@ class GameManager:
 
             if player.is_ai:
                 player.update_ai(dt, self.walkable_mask, self.walkable_bounds)
+            elif network_inputs is not None and idx in network_inputs:
+                player_input = self._sanitize_network_input(network_inputs[idx])
+                if player_input.get("power_pressed"):
+                    player.try_use_power()
+                player.update_from_input_state(
+                    dt,
+                    player_input,
+                    self.walkable_mask,
+                    self.walkable_bounds,
+                )
             else:
                 player.update(dt, keys, self.walkable_mask, self.walkable_bounds)
 
@@ -282,10 +338,14 @@ class GameManager:
 
             # Check hazard collisions
             if self.hazard_manager.check_player_collision(player):
+                # Check for LIFE orb collection before elimination
+                self._check_life_orb_collection(player)
                 self._eliminate_player(player, "hit by hazard")
 
             # Check if player fell off screen
             if player.position.y > WINDOW_SIZE[1] + 100:
+                # Check for LIFE orb collection before elimination
+                self._check_life_orb_collection(player)
                 self._eliminate_player(player, "fell off")
 
         for player in self.players:
@@ -304,6 +364,123 @@ class GameManager:
         platform_empty = not self._any_player_on_platform()
         if alive_count == 0 or platform_empty:
             self._trigger_game_over()
+
+        for player in self.players:
+            player._eliminated = player in self.eliminated_players
+
+        if self.is_network_game and self.is_network_host:
+            if self._snapshot_send_timer >= self._snapshot_interval:
+                self._snapshot_send_timer = 0.0
+                self.network.send_message("snapshot", state=self._build_network_snapshot())
+            self._pending_power_press = False
+            self._authoritative_network_inputs = None
+
+    def _update_client_network_game(self, dt: float):
+        self.water.update(dt)
+        self.orb_manager.advance_visuals(dt)
+        if self.elimination_screen:
+            self.elimination_screen.update(dt)
+        for player in self.players:
+            player._eliminated = player in self.eliminated_players
+            player.current_animation.update(dt)
+
+    def _process_network_messages(self):
+        latest_snapshot = None
+        for message in self.network.get_messages():
+            message_type = message.get("type")
+            if message_type == "disconnect":
+                self.running = False
+                return
+            if self.is_network_host and message_type == "input_state":
+                self._remote_input_state = self._sanitize_network_input(message.get("input"))
+            elif (not self.is_network_host) and message_type == "snapshot":
+                latest_snapshot = message.get("state")
+
+        if latest_snapshot is not None:
+            self._apply_network_snapshot(latest_snapshot)
+
+    def _build_local_input_state(self, keys) -> dict:
+        player = self._local_network_player()
+        controls = getattr(player, "controls", {}) if player else {}
+        return {
+            "up": bool(keys[controls.get("up", pygame.K_w)]),
+            "down": bool(keys[controls.get("down", pygame.K_s)]),
+            "left": bool(keys[controls.get("left", pygame.K_a)]),
+            "right": bool(keys[controls.get("right", pygame.K_d)]),
+            "jump": bool(keys[controls.get("jump", pygame.K_SPACE)]),
+            "power_pressed": bool(self._pending_power_press),
+        }
+
+    def _empty_network_input_state(self) -> dict:
+        return {
+            "up": False,
+            "down": False,
+            "left": False,
+            "right": False,
+            "jump": False,
+            "power_pressed": False,
+        }
+
+    def _sanitize_network_input(self, payload) -> dict:
+        clean = self._empty_network_input_state()
+        if not isinstance(payload, dict):
+            return clean
+        for key in clean:
+            clean[key] = bool(payload.get(key, False))
+        return clean
+
+    def _local_network_player(self):
+        if not self.is_network_game:
+            return None
+        if 0 <= self.local_player_index < len(self.players):
+            return self.players[self.local_player_index]
+        return None
+
+    def _build_network_snapshot(self) -> dict:
+        return {
+            "time_since_start": float(self._time_since_start),
+            "game_over": bool(self.game_over),
+            "players": [
+                {
+                    "player": player.snapshot_state(),
+                    "power": snapshot_power_state(player.power),
+                }
+                for player in self.players
+            ],
+            "tiles": self.tile_manager.snapshot_state(),
+            "hazards": self.hazard_manager.snapshot_state(),
+            "orbs": self.orb_manager.snapshot_state(),
+            "hud": self.hud.snapshot_state(),
+        }
+
+    def _apply_network_snapshot(self, snapshot):
+        if not isinstance(snapshot, dict):
+            return
+
+        self._time_since_start = float(snapshot.get("time_since_start", self._time_since_start))
+        self.tile_manager.apply_snapshot(snapshot.get("tiles"))
+        self.walkable_mask = self.tile_manager.get_updated_walkable_mask(self.original_walkable_mask)
+        self.hazard_manager.apply_snapshot(snapshot.get("hazards"))
+        self.orb_manager.apply_snapshot(snapshot.get("orbs"))
+        self.hud.apply_snapshot(snapshot.get("hud"))
+
+        self.eliminated_players.clear()
+        for idx, entry in enumerate(snapshot.get("players", []) or []):
+            if idx >= len(self.players) or not isinstance(entry, dict):
+                continue
+            player_state = entry.get("player") or {}
+            player = self.players[idx]
+            player.apply_snapshot_state(player_state)
+            apply_power_state(player.power, entry.get("power"))
+            if player_state.get("eliminated"):
+                self.eliminated_players.append(player)
+
+        next_game_over = bool(snapshot.get("game_over", False))
+        if next_game_over and not self.game_over:
+            self._trigger_game_over()
+        elif not next_game_over and self.game_over:
+            self.game_over = False
+            self.elimination_screen = None
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -483,10 +660,38 @@ class GameManager:
         if player not in self.eliminated_players:
             self._eliminate_player(player, "drowned")
 
+    def _check_life_orb_collection(self, player):
+        """Check if player can collect a LIFE orb before elimination."""
+        # Check if player is about to be eliminated and can collect a LIFE orb
+        for orb in self.orb_manager.orbs:
+            if not orb.active:
+                continue
+            if orb.orb_type.value == "life" and orb.check_collection(player):
+                orb.collect()
+                from orbs import apply_orb_effect
+                msg = apply_orb_effect(orb.orb_type, player, self)
+                self.orb_manager._notification = msg
+                self.orb_manager._notification_timer = 2.5
+                print(f"Player collected LIFE orb before elimination!")
+                break
+
     def _eliminate_player(self, player, reason: str):
         """Mark a player as eliminated."""
         if self._can_block_elimination(player, reason):
+            print(f"Elimination blocked by shield/immunity (Reason: {reason})")
             return
+        # Check if player has an extra life to revive
+        if hasattr(player, 'has_extra_life') and player.has_extra_life():
+            if player.use_life():
+                # Remove from eliminated list if they were in it
+                if player in self.eliminated_players:
+                    self.eliminated_players.remove(player)
+                # Reset eliminated flag
+                player._eliminated = False
+                # Revive the player at a safe position
+                self._rescue_player_to_safe_tile(player)
+                print(f"Player revived with extra life! (Reason: {reason})")
+                return
         if player not in self.eliminated_players:
             self.eliminated_players.append(player)
             print(f"Player eliminated: {reason}")
@@ -536,6 +741,8 @@ class GameManager:
                 "eliminated"
             )
             self.elimination_screen.show()
+            if self.is_network_game and self.is_network_host and self.network and self.network.connected:
+                self.network.send_message("snapshot", state=self._build_network_snapshot())
 
     def _restart_game(self):
         """Restart the game."""
@@ -720,6 +927,8 @@ class GameManager:
         return (int(screen_x), int(screen_y))
 
     def _player_slot_count(self) -> int:
+        if self.is_network_game:
+            return 2
         if self.game_mode == MODE_LOCAL_MULTIPLAYER:
             return max(2, len(self.selected_characters))
         if self.game_mode == MODE_VS_COMPUTER:
@@ -784,6 +993,8 @@ class GameManager:
 
         if hasattr(self, "audio"):
             self.audio.stop_music()
+        if self.network:
+            self.network.disconnect()
         pygame.quit()
 
 

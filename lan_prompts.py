@@ -1,68 +1,445 @@
-import pygame
+import math
 import sys
-from settings import (
-    WINDOW_SIZE, MODE_CARD_WIDTH, MODE_CARD_HEIGHT, MODE_CARD_BASE_COLOR, MODE_CARD_HOVER_COLOR,
-    MODE_CARD_BORDER_ONLINE_MP, MODE_CARD_HOVER_BORDER_ONLINE_MP, FONT_PATH_HEADING, FONT_PATH_BODY,
-    FONT_SIZE_HEADING, FONT_SIZE_BODY
-)
+
+import pygame
+
+from network import LanGameFinder
 from scenes.common import _draw_rounded_rect, _load_font
+from settings import (
+    FONT_PATH_BODY,
+    FONT_PATH_HEADING,
+    FONT_PATH_SMALL,
+    FONT_SIZE_BODY,
+    FONT_SIZE_HEADING,
+    FONT_SIZE_SMALL,
+    MODE_BG_COLOR,
+    MODE_BG_IMAGE_PATH,
+    MODE_CARD_BASE_COLOR,
+    MODE_CARD_BORDER_ONLINE_MP,
+    MODE_CARD_HEIGHT,
+    MODE_CARD_HOVER_BORDER_ONLINE_MP,
+    MODE_CARD_HOVER_COLOR,
+    MODE_CARD_WIDTH,
+    SCENE_FADE_SPEED,
+    SCENE_OVERLAY_COLOR,
+    TARGET_FPS,
+    WINDOW_SIZE,
+)
+
+
+_LAN_BG_CACHE = None
+
+
+def _load_lan_background():
+    global _LAN_BG_CACHE
+    if _LAN_BG_CACHE is not None:
+        return _LAN_BG_CACHE
+    if MODE_BG_IMAGE_PATH.exists():
+        try:
+            raw_bg = pygame.image.load(str(MODE_BG_IMAGE_PATH)).convert()
+            width, height = WINDOW_SIZE
+            img_w, img_h = raw_bg.get_size()
+            scale = max(width / img_w, height / img_h)
+            scaled = pygame.transform.smoothscale(
+                raw_bg,
+                (int(img_w * scale), int(img_h * scale)),
+            )
+            crop_x = max(0, (scaled.get_width() - width) // 2)
+            crop_y = max(0, (scaled.get_height() - height) // 2)
+            _LAN_BG_CACHE = scaled.subsurface((crop_x, crop_y, width, height)).copy()
+            return _LAN_BG_CACHE
+        except Exception:
+            _LAN_BG_CACHE = False
+            return None
+    _LAN_BG_CACHE = False
+    return None
+
+
+def draw_lan_backdrop(screen, anim_time: float = 0.0):
+    background = _load_lan_background()
+    if background:
+        screen.blit(background, (0, 0))
+        overlay = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
+        overlay.fill((8, 10, 22, 150))
+        screen.blit(overlay, (0, 0))
+    else:
+        screen.fill(MODE_BG_COLOR)
+
+    width, height = WINDOW_SIZE
+    glow = pygame.Surface((width, height), pygame.SRCALPHA)
+    pulse = 0.5 + 0.5 * math.sin(anim_time * 1.4)
+    pygame.draw.circle(
+        glow,
+        (120, 90, 255, int(28 + 18 * pulse)),
+        (width // 2, height // 3),
+        min(width, height) // 3,
+    )
+    pygame.draw.circle(
+        glow,
+        (70, 180, 255, int(20 + 10 * (1.0 - pulse))),
+        (width // 2, int(height * 0.78)),
+        min(width, height) // 4,
+    )
+    screen.blit(glow, (0, 0), special_flags=pygame.BLEND_ADD)
+
+
+def _fade(screen, clock, draw_frame, fade_in: bool):
+    overlay = pygame.Surface(WINDOW_SIZE)
+    alpha = 255 if fade_in else 0
+    local_time = 0.0
+
+    while True:
+        dt = clock.tick(TARGET_FPS) / 1000.0
+        local_time += dt
+        step = SCENE_FADE_SPEED * dt
+        if fade_in:
+            alpha -= step
+            if alpha <= 0:
+                break
+        else:
+            alpha += step
+            if alpha >= 255:
+                alpha = 255
+                break
+
+        draw_frame(local_time)
+        overlay.fill(SCENE_OVERLAY_COLOR)
+        overlay.set_alpha(int(alpha))
+        screen.blit(overlay, (0, 0))
+        pygame.display.flip()
+
+
+def _wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if font.size(candidate)[0] <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
 
 def prompt_host_or_join(screen, clock):
-    options = ["Host a game", "Join a game"]
-    selected = 0
+    options = [
+        {
+            "value": "host",
+            "title": "HOST GAME",
+            "desc": "Create a LAN match for another player on the same network.",
+            "hint": "Your machine becomes visible to others on this Wi-Fi.",
+        },
+        {
+            "value": "discover",
+            "title": "FIND GAMES ON LAN",
+            "desc": "Scan for visible hosts on the same Wi-Fi or router.",
+            "hint": "Choose a visible machine instead of typing an IP.",
+        },
+    ]
+
     width, height = WINDOW_SIZE
-    card_w, card_h = MODE_CARD_WIDTH, MODE_CARD_HEIGHT
-    gap = 34
-    total_h = len(options) * card_h + (len(options) - 1) * gap
-    start_y = (height - total_h) // 2 + 60
-    font_title = _load_font(FONT_PATH_HEADING, 38, bold=True)
-    font_card = _load_font(FONT_PATH_HEADING, 24, bold=True)
-    font_desc = _load_font(FONT_PATH_BODY, 18)
+    font_header = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING + 4, bold=True)
+    font_title = _load_font(FONT_PATH_HEADING, 22, bold=True)
+    font_body = _load_font(FONT_PATH_BODY, FONT_SIZE_BODY - 4)
+    font_small = _load_font(FONT_PATH_SMALL, FONT_SIZE_SMALL - 2)
+
+    selected = 0
+    anim_time = 0.0
+    header_offset = 80.0
     cards = []
-    for i, opt in enumerate(options):
-        rect = pygame.Rect(0, start_y + (card_h + gap) * i, card_w, card_h)
+    gap = 34
+    total_h = len(options) * MODE_CARD_HEIGHT + (len(options) - 1) * gap
+    start_y = (height - total_h) // 2 + 80
+
+    for idx, option in enumerate(options):
+        rect = pygame.Rect(
+            0,
+            start_y + idx * (MODE_CARD_HEIGHT + gap),
+            MODE_CARD_WIDTH,
+            MODE_CARD_HEIGHT,
+        )
         rect.centerx = width // 2
-        cards.append(rect)
-    running = True
-    while running:
+        cards.append(
+            {
+                "option": option,
+                "rect": rect,
+                "hover_y": 0.0,
+                "click_timer": 0.0,
+            }
+        )
+
+    def draw_frame(local_time: float):
+        nonlocal header_offset
+        draw_lan_backdrop(screen, anim_time + local_time)
+        progress = min(1.0, (anim_time + local_time) / 0.65)
+        eased = 1.0 - (1.0 - progress) ** 3
+        header_offset = 80.0 * (1.0 - eased)
+
+        title = font_header.render("PLAY OVER LAN", True, (255, 255, 255))
+        subtitle = font_body.render(
+            "Both machines must be on the same local network.",
+            True,
+            (205, 210, 225),
+        )
+        screen.blit(title, title.get_rect(center=(width // 2, int(78 + header_offset))))
+        screen.blit(subtitle, subtitle.get_rect(center=(width // 2, int(136 + header_offset))))
+
         mouse_pos = pygame.mouse.get_pos()
-        hovered = None
-        for i, rect in enumerate(cards):
-            if rect.collidepoint(mouse_pos):
-                hovered = i
-        screen.fill((10, 14, 26))
-        title = font_title.render("LAN MULTIPLAYER", True, (255, 255, 255))
-        screen.blit(title, (width // 2 - title.get_width() // 2, 80))
-        for i, rect in enumerate(cards):
-            is_selected = (i == selected) or (i == hovered)
-            bg_color = MODE_CARD_HOVER_COLOR if is_selected else MODE_CARD_BASE_COLOR
-            border_color = MODE_CARD_HOVER_BORDER_ONLINE_MP if is_selected else MODE_CARD_BORDER_ONLINE_MP
-            _draw_rounded_rect(screen, rect, bg_color, border_color, 3 if is_selected else 2, 16)
-            label = font_card.render(options[i], True, border_color)
-            label_rect = label.get_rect(center=(rect.centerx, rect.centery - 10))
-            screen.blit(label, label_rect)
-            desc = "Host a new LAN game for others to join" if i == 0 else "Join a LAN game by entering host's IP"
-            desc_surf = font_desc.render(desc, True, (200, 200, 200))
-            desc_rect = desc_surf.get_rect(center=(rect.centerx, rect.centery + 28))
-            screen.blit(desc_surf, desc_rect)
+        for idx, card in enumerate(cards):
+            rect = card["rect"].copy()
+            hovered = rect.collidepoint(mouse_pos)
+            target_y = -6.0 if hovered or idx == selected else 0.0
+            card["hover_y"] += (target_y - card["hover_y"]) * 0.22
+            rect.y += int(card["hover_y"])
+
+            if card["click_timer"] > 0:
+                card["click_timer"] = max(0.0, card["click_timer"] - 1 / TARGET_FPS)
+            scale = 1.0 - 0.04 * (card["click_timer"] / 0.12) if card["click_timer"] > 0 else 1.0
+            if scale != 1.0:
+                rect = pygame.Rect(
+                    rect.centerx - int(rect.width * scale) // 2,
+                    rect.centery - int(rect.height * scale) // 2,
+                    int(rect.width * scale),
+                    int(rect.height * scale),
+                )
+
+            active = hovered or idx == selected
+            bg = MODE_CARD_HOVER_COLOR if active else MODE_CARD_BASE_COLOR
+            border = MODE_CARD_HOVER_BORDER_ONLINE_MP if active else MODE_CARD_BORDER_ONLINE_MP
+
+            pulse = 0.5 + 0.5 * math.sin((anim_time + local_time) * 3.5 + idx)
+            if active:
+                glow = pygame.Surface((rect.width + 20, rect.height + 20), pygame.SRCALPHA)
+                pygame.draw.rect(
+                    glow,
+                    (border[0], border[1], border[2], int(34 + 24 * pulse)),
+                    glow.get_rect(),
+                    border_radius=20,
+                )
+                screen.blit(glow, (rect.left - 10, rect.top - 10), special_flags=pygame.BLEND_ADD)
+
+            _draw_rounded_rect(screen, rect, bg, border, 3 if active else 2, 16)
+
+            title_surf = font_title.render(
+                card["option"]["title"],
+                True,
+                border if active else (255, 255, 255),
+            )
+            max_text_width = rect.width - 48
+            desc_lines = _wrap_text(font_body, card["option"]["desc"], max_text_width)
+            hint_lines = _wrap_text(font_small, card["option"]["hint"], max_text_width)
+
+            screen.blit(title_surf, title_surf.get_rect(midtop=(rect.centerx, rect.top + 16)))
+
+            line_y = rect.top + 52
+            for line in desc_lines[:2]:
+                desc_surf = font_body.render(line, True, (215, 220, 235))
+                screen.blit(desc_surf, desc_surf.get_rect(midtop=(rect.centerx, line_y)))
+                line_y += 18
+
+            line_y += 6
+            for line in hint_lines[:2]:
+                hint_surf = font_small.render(line, True, (160, 175, 210))
+                screen.blit(hint_surf, hint_surf.get_rect(midtop=(rect.centerx, line_y)))
+                line_y += 16
+
+        footer = font_small.render("ENTER to confirm  *  ESC to go back", True, (175, 185, 205))
+        screen.blit(footer, footer.get_rect(center=(width // 2, height - 42)))
+
+    _fade(screen, clock, draw_frame, fade_in=True)
+
+    while True:
+        dt = clock.tick(TARGET_FPS) / 1000.0
+        anim_time += dt
+        draw_frame(0.0)
         pygame.display.flip()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_UP, pygame.K_w):
-                    selected = (selected - 1) % len(options)
+                    selected = (selected - 1) % len(cards)
                 elif event.key in (pygame.K_DOWN, pygame.K_s):
-                    selected = (selected + 1) % len(options)
+                    selected = (selected + 1) % len(cards)
                 elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
-                    return "host" if selected == 0 else "join"
+                    cards[selected]["click_timer"] = 0.12
+                    draw_frame(0.0)
+                    pygame.display.flip()
+                    return cards[selected]["option"]["value"]
                 elif event.key == pygame.K_ESCAPE:
                     return None
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                for i, rect in enumerate(cards):
-                    if rect.collidepoint(event.pos):
-                        return "host" if i == 0 else "join"
+                for idx, card in enumerate(cards):
+                    hover_rect = card["rect"].copy()
+                    hover_rect.y += int(card["hover_y"])
+                    if hover_rect.collidepoint(event.pos):
+                        selected = idx
+                        card["click_timer"] = 0.12
+                        draw_frame(0.0)
+                        pygame.display.flip()
+                        return card["option"]["value"]
+
+
+def prompt_discovered_host(screen, clock):
+    width, height = WINDOW_SIZE
+    font_header = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING + 2, bold=True)
+    font_body = _load_font(FONT_PATH_BODY, FONT_SIZE_BODY)
+    font_small = _load_font(FONT_PATH_SMALL, FONT_SIZE_SMALL)
+    font_title = _load_font(FONT_PATH_HEADING, 22, bold=True)
+
+    finder = LanGameFinder()
+    if not finder.start():
+        return None
+
+    anim_time = 0.0
+    header_offset = 70.0
+    probe_timer = 0.0
+    selected = 0
+    host_rects = []
+
+    def draw_frame(local_time: float, hosts):
+        nonlocal header_offset
+        total_time = anim_time + local_time
+        draw_lan_backdrop(screen, total_time)
+        progress = min(1.0, total_time / 0.65)
+        eased = 1.0 - (1.0 - progress) ** 3
+        header_offset = 70.0 * (1.0 - eased)
+
+        title = font_header.render("FIND GAMES ON LAN", True, (255, 255, 255))
+        subtitle = font_body.render(
+            "Visible hosts on this local network appear below.",
+            True,
+            (205, 210, 225),
+        )
+        screen.blit(title, title.get_rect(center=(width // 2, int(88 + header_offset))))
+        screen.blit(subtitle, subtitle.get_rect(center=(width // 2, int(140 + header_offset))))
+
+        host_rects.clear()
+        list_top = int(height * 0.32)
+        list_width = min(940, width - 150)
+        list_x = width // 2 - list_width // 2
+        mouse_pos = pygame.mouse.get_pos()
+
+        if hosts:
+            card_height = 92
+            gap = 18
+            for idx, host in enumerate(hosts[:4]):
+                rect = pygame.Rect(list_x, list_top + idx * (card_height + gap), list_width, card_height)
+                hovered = rect.collidepoint(mouse_pos)
+                active = hovered or idx == selected
+                border = MODE_CARD_HOVER_BORDER_ONLINE_MP if active else MODE_CARD_BORDER_ONLINE_MP
+                bg = MODE_CARD_HOVER_COLOR if active else MODE_CARD_BASE_COLOR
+                pulse = 0.5 + 0.5 * math.sin(total_time * 3.0 + idx)
+                if active:
+                    glow = pygame.Surface((rect.width + 18, rect.height + 18), pygame.SRCALPHA)
+                    pygame.draw.rect(
+                        glow,
+                        (border[0], border[1], border[2], int(28 + 18 * pulse)),
+                        glow.get_rect(),
+                        border_radius=20,
+                    )
+                    screen.blit(glow, (rect.left - 9, rect.top - 9), special_flags=pygame.BLEND_ADD)
+                _draw_rounded_rect(screen, rect, bg, border, 3 if active else 2, 16)
+
+                title_surf = font_title.render(host.host_name.upper(), True, border if active else (255, 255, 255))
+                machine_surf = font_body.render(host.machine_name, True, (220, 225, 235))
+                address_surf = font_small.render(f"{host.address}:{host.port}", True, (165, 175, 205))
+                screen.blit(title_surf, title_surf.get_rect(topleft=(rect.left + 24, rect.top + 16)))
+                screen.blit(machine_surf, machine_surf.get_rect(topleft=(rect.left + 24, rect.top + 44)))
+                screen.blit(address_surf, address_surf.get_rect(topright=(rect.right - 24, rect.top + 24)))
+                host_rects.append((rect, host))
+        else:
+            panel = pygame.Rect(0, 0, min(860, width - 180), 210)
+            panel.center = (width // 2, int(height * 0.58))
+            pulse = 0.5 + 0.5 * math.sin(total_time * 3.0)
+            glow = pygame.Surface((panel.width + 24, panel.height + 24), pygame.SRCALPHA)
+            pygame.draw.rect(
+                glow,
+                (180, 80, 255, int(30 + 22 * pulse)),
+                glow.get_rect(),
+                border_radius=24,
+            )
+            screen.blit(glow, (panel.left - 12, panel.top - 12), special_flags=pygame.BLEND_ADD)
+            _draw_rounded_rect(screen, panel, (24, 32, 54), MODE_CARD_BORDER_ONLINE_MP, 3, 18)
+
+            spinner = "." * (1 + (int(total_time * 3.5) % 3))
+            waiting = font_title.render(f"SCANNING FOR HOSTS{spinner}", True, (255, 255, 255))
+            helper = font_body.render("Make sure another player already chose Host Game.", True, (210, 220, 240))
+            tip = font_small.render("Press R to refresh or ESC to go back.", True, (165, 175, 205))
+            screen.blit(waiting, waiting.get_rect(center=(panel.centerx, panel.top + 68)))
+            screen.blit(helper, helper.get_rect(center=(panel.centerx, panel.top + 114)))
+            screen.blit(tip, tip.get_rect(center=(panel.centerx, panel.top + 154)))
+
+        helper = font_small.render(
+            "Hosts are discovered automatically on the same local network.",
+            True,
+            (165, 175, 205),
+        )
+        footer = font_small.render("ENTER to connect  *  R to rescan  *  ESC to go back", True, (175, 185, 205))
+        screen.blit(helper, helper.get_rect(center=(width // 2, height - 70)))
+        screen.blit(footer, footer.get_rect(center=(width // 2, height - 42)))
+
+    try:
+        _fade(screen, clock, lambda local_time: draw_frame(local_time, finder.poll_hosts()), fade_in=True)
+
+        while True:
+            dt = clock.tick(TARGET_FPS) / 1000.0
+            anim_time += dt
+            probe_timer += dt
+            if probe_timer >= 1.0:
+                finder.probe()
+                probe_timer = 0.0
+
+            hosts = finder.poll_hosts()
+            visible_hosts = hosts[:4]
+            if selected >= len(visible_hosts):
+                selected = max(0, len(visible_hosts) - 1)
+
+            draw_frame(0.0, visible_hosts)
+            pygame.display.flip()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_UP, pygame.K_w) and visible_hosts:
+                        selected = (selected - 1) % len(visible_hosts)
+                    elif event.key in (pygame.K_DOWN, pygame.K_s) and visible_hosts:
+                        selected = (selected + 1) % len(visible_hosts)
+                    elif event.key == pygame.K_r:
+                        finder.probe()
+                        probe_timer = 0.0
+                    elif event.key == pygame.K_RETURN and visible_hosts:
+                        host = visible_hosts[selected]
+                        return {
+                            "host_name": host.host_name,
+                            "machine_name": host.machine_name,
+                            "address": host.address,
+                            "port": host.port,
+                        }
+                    elif event.key == pygame.K_ESCAPE:
+                        return None
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for rect, host in host_rects:
+                        if rect.collidepoint(event.pos):
+                            return {
+                                "host_name": host.host_name,
+                                "machine_name": host.machine_name,
+                                "address": host.address,
+                                "port": host.port,
+                            }
+    finally:
+        finder.close()
+
 
 def prompt_ip_entry(screen, clock):
     width, height = WINDOW_SIZE
