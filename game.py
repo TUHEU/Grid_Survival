@@ -8,6 +8,7 @@ from audio import get_audio
 from collision_manager import CollisionManager
 from player import Player
 from orbs import OrbManager
+from pacman_enemies import PacmanEnemyManager
 from powers import (
     apply_power_state,
     get_power_for_character,
@@ -105,6 +106,7 @@ class GameManager:
         self.hud = GameHUD()
         self.water = AnimatedWater()
         self.orb_manager = OrbManager()
+        self.pacman_enemy_manager = None
 
         # Initialize players based on game mode
         self.players = []
@@ -197,6 +199,11 @@ class GameManager:
         self._ensure_players_on_walkable_surface()
         self._force_safe_spawns()
         self._configure_powers_for_players()
+        if not self.is_network_game:
+            enemy_count = self._pacman_enemy_count()
+            if enemy_count > 0:
+                enemy_spawns = self._initial_pacman_enemy_spawns(enemy_count)
+                self.pacman_enemy_manager = PacmanEnemyManager(enemy_spawns)
 
         self.hud.set_player_info(player_name, len(self.players), len(self.players))
 
@@ -357,6 +364,21 @@ class GameManager:
                 continue
             if player.power:
                 player.power.apply_to_game(self)
+
+        if self.pacman_enemy_manager:
+            ghost_victims = self.pacman_enemy_manager.update(
+                dt,
+                self.players,
+                self.walkable_mask,
+                self.walkable_bounds,
+            )
+            seen_victims: set[int] = set()
+            for victim in ghost_victims:
+                victim_id = id(victim)
+                if victim_id in seen_victims:
+                    continue
+                seen_victims.add(victim_id)
+                self._eliminate_player(victim, "hit by hazard")
 
         self.orb_manager.update(dt, self.walkable_bounds, self.players, self)
 
@@ -552,6 +574,10 @@ class GameManager:
         # Draw orbs floating above the arena
         self.orb_manager.draw(self.screen)
 
+        # Draw pacman-style enemies before the player front layer
+        if self.pacman_enemy_manager:
+            self.pacman_enemy_manager.draw(self.screen)
+
         # Draw players in front of map
         for player in players_front:
             player.draw(self.screen)
@@ -736,6 +762,7 @@ class GameManager:
                 return
         if player not in self.eliminated_players:
             self.eliminated_players.append(player)
+            player._eliminated = True
             print(f"Player eliminated: {reason}")
             # Trigger death state if available
             if hasattr(player, 'die'):
@@ -818,6 +845,9 @@ class GameManager:
         self.hud.reset()
         self._spawn_adjusted = False
         self._time_since_start = 0.0
+
+        if self.pacman_enemy_manager:
+            self.pacman_enemy_manager.reset()
 
         for player in self.players:
             player.reset()
@@ -1036,6 +1066,50 @@ class GameManager:
         if self.game_mode == MODE_VS_COMPUTER:
             return self._vs_computer_spawns(count)
         return self._spawn_positions(count)
+
+    def _pacman_enemy_count(self) -> int:
+        if self.is_network_game:
+            return 0
+        if self.game_mode == MODE_VS_COMPUTER:
+            return 1
+        if self.game_mode == MODE_LOCAL_MULTIPLAYER:
+            return 2
+        return 1 if self.players else 0
+
+    def _initial_pacman_enemy_spawns(self, count: int) -> list[tuple[int, int]]:
+        if count <= 0:
+            return []
+        if not self.players:
+            return [PLAYER_START_POS for _ in range(count)]
+        if not self.walkable_mask:
+            return self._spawn_positions(count)
+
+        occupied = {
+            (int(round(player.position.x)), int(round(player.position.y)))
+            for player in self.players
+        }
+        center = self._walkable_center()
+        prototype = self.players[0]
+        offsets = [
+            pygame.Vector2(0, -160),
+            pygame.Vector2(160, 0),
+            pygame.Vector2(0, 160),
+            pygame.Vector2(-160, 0),
+            pygame.Vector2(120, -120),
+            pygame.Vector2(120, 120),
+            pygame.Vector2(-120, 120),
+            pygame.Vector2(-120, -120),
+        ]
+
+        spawns: list[tuple[int, int]] = []
+        for index in range(count):
+            offset = offsets[index % len(offsets)]
+            spread = (index // len(offsets)) * 48
+            candidate = center + offset + pygame.Vector2(spread, 0)
+            spawn = self._find_valid_fallback(prototype, occupied, candidate)
+            spawns.append(spawn)
+            occupied.add(spawn)
+        return spawns
 
     def _character_choice(self, index: int) -> str | None:
         if not self.selected_characters:
