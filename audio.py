@@ -8,7 +8,7 @@ import random
 
 import pygame
 
-from settings import ASSETS_DIR, MUSIC_PATH
+from settings import ASSETS_DIR, MUSIC_PATH, MUSIC_VOLUME
 
 DEFAULT_MUSIC_PATH = MUSIC_PATH
 SFX_DIR = ASSETS_DIR / "sounds"
@@ -26,7 +26,7 @@ class AudioManager:
         self._playlist_fade_ms = 1500
         self._sfx_cache: Dict[Path, pygame.mixer.Sound] = {}
         self._is_muted = False
-        self._music_volume = 0.45  # Default volume
+        self._music_volume = MUSIC_VOLUME
         self._ensure_mixer()
 
     def _ensure_mixer(self):
@@ -136,7 +136,7 @@ class AudioManager:
         max_instances: Optional[int] = None,
     ):
         self._ensure_mixer()
-        if not self._initialized:
+        if not self._initialized or self._is_muted:
             return
 
         sound_path = self._resolve_sfx_path(identifier)
@@ -159,7 +159,7 @@ class AudioManager:
                 if volume_jitter > 0:
                     jitter = random.uniform(-abs(volume_jitter), abs(volume_jitter))
                     vol += jitter
-                channel.set_volume(self._clamp_volume(vol))
+                channel.set_volume(self._clamp_volume(vol * self._music_volume))
         except pygame.error as exc:
             print(f"[Audio] Failed to play SFX '{sound_path.name}': {exc}")
 
@@ -189,6 +189,18 @@ class AudioManager:
             pygame.mixer.music.set_volume(0.0)
         else:
             pygame.mixer.music.set_volume(self._music_volume)
+
+    def get_volume(self) -> float:
+        return self._music_volume
+
+    def set_volume(self, value: float) -> float:
+        self._music_volume = self._clamp_volume(value)
+        if self._initialized and not self._is_muted:
+            pygame.mixer.music.set_volume(self._music_volume)
+        return self._music_volume
+
+    def adjust_volume(self, delta: float) -> float:
+        return self.set_volume(self._music_volume + delta)
 
     def _play_music_path(
         self,

@@ -22,6 +22,7 @@ from ui import GameHUD, EliminationScreen, VictoryScreen
 from settings import (
     BACKGROUND_COLOR,
     BACKGROUND_MUSIC_TRACKS,
+    AUDIO_VOLUME_STEP,
     DEBUG_DRAW_WALKABLE,
     DEBUG_VISUALS_ENABLED,
     DEBUG_WALKABLE_COLOR,
@@ -34,7 +35,6 @@ from settings import (
     USE_AI_PLAYER,
     WINDOW_SIZE,
     WINDOW_TITLE,
-    MUSIC_VOLUME,
     SOUND_PLAYER_FALL,
 )
 
@@ -216,7 +216,6 @@ class GameManager:
             start_random=True,
             loop=True,
             fade_ms=1500,
-            volume=MUSIC_VOLUME,
         )
 
     def handle_events(self):
@@ -229,7 +228,16 @@ class GameManager:
                         self.audio.toggle_mute()
                     elif self._handle_ninja_target_click(event.pos):
                         continue
+            elif event.type == pygame.MOUSEWHEEL:
+                if event.y:
+                    self._adjust_audio_volume(event.y * AUDIO_VOLUME_STEP)
             elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_PAGEUP, pygame.K_EQUALS, pygame.K_KP_PLUS, pygame.K_RIGHTBRACKET):
+                    self._adjust_audio_volume(AUDIO_VOLUME_STEP)
+                    continue
+                if event.key in (pygame.K_PAGEDOWN, pygame.K_MINUS, pygame.K_KP_MINUS, pygame.K_LEFTBRACKET):
+                    self._adjust_audio_volume(-AUDIO_VOLUME_STEP)
+                    continue
                 if event.key == pygame.K_l and not self.is_network_game:
                     for player in self.players:
                         player.reset()
@@ -609,7 +617,7 @@ class GameManager:
                 player.power.draw(self.screen, player)
 
         # Draw HUD
-        self.hud.draw(self.screen, self.players, is_muted=self.audio.is_muted)
+        self.hud.draw(self.screen, self.players, is_muted=self.audio.is_muted, volume=self.audio.get_volume())
 
         # Draw elimination screen if game over
         if self.victory_screen:
@@ -956,6 +964,9 @@ class GameManager:
                     break
                 if player.try_use_power(self):
                     break
+
+    def _adjust_audio_volume(self, delta: float):
+        self.audio.adjust_volume(delta)
 
     def _handle_ninja_target_click(self, pos) -> bool:
         for player in self.players:

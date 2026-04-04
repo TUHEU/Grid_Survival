@@ -131,8 +131,8 @@ class PlayerCardRenderer:
         surface.blit(portrait, portrait_rect)
 
         if orb_label:
-            orb_icon_center = (portrait_rect.centerx, portrait_rect.bottom + 18)
-            self._draw_orb_icon(surface, orb_icon_center, orb_label, True, size=28)
+            orb_icon_center = (portrait_rect.centerx, portrait_rect.bottom + 25)
+            self._draw_orb_icon(surface, orb_icon_center, orb_label, True, size=40)
 
         text_x = portrait_rect.right + 12
         text_y = rect.top + 14
