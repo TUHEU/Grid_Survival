@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 
 import pygame
@@ -364,6 +365,70 @@ class TitleScreen:
         label = self._font_small.render("TUTORIAL", True, (235, 240, 250))
         self.screen.blit(label, label.get_rect(center=self._tutorial_button_rect.center))
 
+    def _start_tutorial_audio(self) -> tuple[bool, str | None]:
+        """Start tutorial audio from the MP4, with extraction fallback if needed."""
+        try:
+            pygame.mixer.music.load(str(TUTORIAL_VIDEO_PATH))
+            pygame.mixer.music.play(loops=0)
+            if self.audio.is_muted:
+                pygame.mixer.music.set_volume(0.0)
+            else:
+                pygame.mixer.music.set_volume(self.audio.get_volume())
+            return True, None
+        except pygame.error:
+            pass
+
+        temp_audio_path: str | None = None
+        try:
+            import importlib
+            import tempfile
+
+            try:
+                video_file_clip = importlib.import_module("moviepy.editor").VideoFileClip
+            except Exception:
+                # MoviePy 2.x exposes VideoFileClip from the top-level package.
+                video_file_clip = importlib.import_module("moviepy").VideoFileClip
+
+            with video_file_clip(str(TUTORIAL_VIDEO_PATH)) as clip:
+                if clip.audio is None:
+                    return False, None
+
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                temp_audio_path = temp_file.name
+                temp_file.close()
+
+                clip.audio.write_audiofile(
+                    temp_audio_path,
+                    logger=None,
+                )
+
+            pygame.mixer.music.load(temp_audio_path)
+            pygame.mixer.music.play(loops=0)
+            if self.audio.is_muted:
+                pygame.mixer.music.set_volume(0.0)
+            else:
+                pygame.mixer.music.set_volume(self.audio.get_volume())
+            return True, temp_audio_path
+        except Exception:
+            if temp_audio_path:
+                try:
+                    os.remove(temp_audio_path)
+                except OSError:
+                    pass
+            return False, None
+
+    def _stop_tutorial_audio(self, temp_audio_path: str | None) -> None:
+        try:
+            pygame.mixer.music.stop()
+        except pygame.error:
+            pass
+
+        if temp_audio_path:
+            try:
+                os.remove(temp_audio_path)
+            except OSError:
+                pass
+
     def _play_tutorial_video(self) -> None:
         if not TUTORIAL_VIDEO_PATH.exists():
             self.warning_text = "TUTORIAL VIDEO NOT FOUND"
@@ -386,6 +451,10 @@ class TitleScreen:
             return
 
         self.audio.stop_music(fade_ms=200)
+        audio_started, temp_audio_path = self._start_tutorial_audio()
+        if not audio_started:
+            self.warning_text = "TUTORIAL AUDIO UNAVAILABLE"
+            self.warning_timer = WARNING_DISPLAY_DURATION
 
         fps = capture.get(cv2.CAP_PROP_FPS)
         if fps <= 1 or fps > 120:
@@ -404,8 +473,10 @@ class TitleScreen:
             panel_rect.width - padding * 2,
             panel_rect.height - header_h - padding - 8,
         )
+        should_resume_music = True
+        is_running = True
 
-        while True:
+        while is_running:
             dt = frame_clock.tick(target_fps) / 1000.0
             close_rect = pygame.Rect(panel_rect.right - 104, panel_rect.top + 10, 88, 30)
             for event in pygame.event.get():
@@ -413,17 +484,19 @@ class TitleScreen:
                     continue
                 if event.type == pygame.QUIT:
                     self._quit_requested = True
-                    capture.release()
-                    return
+                    should_resume_music = False
+                    is_running = False
+                    break
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
-                    capture.release()
-                    self._start_music()
-                    return
+                    is_running = False
+                    break
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if close_rect.collidepoint(event.pos):
-                        capture.release()
-                        self._start_music()
-                        return
+                        is_running = False
+                        break
+
+            if not is_running:
+                break
 
             ok, frame = capture.read()
             if not ok:
@@ -479,7 +552,8 @@ class TitleScreen:
             pygame.display.flip()
 
         capture.release()
-        if not self._quit_requested:
+        self._stop_tutorial_audio(temp_audio_path)
+        if should_resume_music and not self._quit_requested:
             self._start_music()
 
     # ── shake update ─────────────────────────────────────────────────────
