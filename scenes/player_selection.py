@@ -25,7 +25,7 @@ from settings import (
     TARGET_FPS,
     WINDOW_SIZE,
 )
-from .common import _draw_rounded_rect, _load_font
+from .common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 
 # Visual constants for the grid and controls
 BACKGROUND_COLOR = (8, 12, 24)
@@ -116,6 +116,7 @@ class PlayerSelectionScreen:
         self.width, self.height = WINDOW_SIZE
         self.back_requested = False
         self.quit_requested = False
+        self._audio_overlay = SceneAudioOverlay()
 
         self.mode_title, self.mode_hint = MODE_HEADERS.get(
             game_mode,
@@ -599,6 +600,7 @@ class PlayerSelectionScreen:
         self._draw_header()
         self._draw_cards()
         self._draw_summary()
+        self._audio_overlay.draw(self.screen)
 
     # ── selection helpers ──────────────────────────────────────────────
 
@@ -703,6 +705,8 @@ class PlayerSelectionScreen:
             self._update_card_states(dt)
 
             for event in pygame.event.get():
+                if self._audio_overlay.handle_event(event):
+                    continue
                 if event.type == pygame.QUIT:
                     self.quit_requested = True
                     return None

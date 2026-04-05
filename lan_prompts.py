@@ -4,7 +4,7 @@ import sys
 import pygame
 
 from network import LanGameFinder
-from scenes.common import _draw_rounded_rect, _load_font
+from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 from settings import (
     FONT_PATH_BODY,
     FONT_PATH_HEADING,
@@ -148,6 +148,7 @@ def prompt_host_or_join(screen, clock):
     font_title = _load_font(FONT_PATH_HEADING, 22, bold=True)
     font_body = _load_font(FONT_PATH_BODY, FONT_SIZE_BODY - 4)
     font_small = _load_font(FONT_PATH_SMALL, FONT_SIZE_SMALL - 2)
+    audio_overlay = SceneAudioOverlay()
 
     selected = 0
     anim_time = 0.0
@@ -251,6 +252,7 @@ def prompt_host_or_join(screen, clock):
 
         footer = font_small.render("ENTER to confirm  *  ESC to go back", True, (175, 185, 205))
         screen.blit(footer, footer.get_rect(center=(width // 2, height - 42)))
+        audio_overlay.draw(screen)
 
     _fade(screen, clock, draw_frame, fade_in=True)
 
@@ -261,6 +263,8 @@ def prompt_host_or_join(screen, clock):
         pygame.display.flip()
 
         for event in pygame.event.get():
+            if audio_overlay.handle_event(event):
+                continue
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
@@ -294,6 +298,7 @@ def prompt_discovered_host(screen, clock):
     font_body = _load_font(FONT_PATH_BODY, FONT_SIZE_BODY)
     font_small = _load_font(FONT_PATH_SMALL, FONT_SIZE_SMALL)
     font_title = _load_font(FONT_PATH_HEADING, 22, bold=True)
+    audio_overlay = SceneAudioOverlay()
 
     finder = LanGameFinder()
     if not finder.start():
@@ -386,6 +391,7 @@ def prompt_discovered_host(screen, clock):
         footer = font_small.render("ENTER to connect  *  R to rescan  *  ESC to go back", True, (175, 185, 205))
         screen.blit(helper, helper.get_rect(center=(width // 2, height - 70)))
         screen.blit(footer, footer.get_rect(center=(width // 2, height - 42)))
+        audio_overlay.draw(screen)
 
     try:
         _fade(screen, clock, lambda local_time: draw_frame(local_time, finder.poll_hosts()), fade_in=True)
@@ -407,6 +413,8 @@ def prompt_discovered_host(screen, clock):
             pygame.display.flip()
 
             for event in pygame.event.get():
+                if audio_overlay.handle_event(event):
+                    continue
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
@@ -447,6 +455,7 @@ def prompt_ip_entry(screen, clock):
     font_title = _load_font(FONT_PATH_HEADING, 32, bold=True)
     font_body = _load_font(FONT_PATH_BODY, 22)
     font_small = _load_font(FONT_PATH_BODY, 18)
+    audio_overlay = SceneAudioOverlay()
     input_str = ""
     btn_w, btn_h = 160, 50
     btn_gap = 20
@@ -476,6 +485,7 @@ def prompt_ip_entry(screen, clock):
             _draw_rounded_rect(screen, rect, bg, border, 2 if not hovered else 3, 14)
             txt = font_body.render(label, True, border)
             screen.blit(txt, txt.get_rect(center=rect.center))
+        audio_overlay.draw(screen)
         pygame.display.flip()
 
     cursor_timer = 0.0
@@ -485,6 +495,8 @@ def prompt_ip_entry(screen, clock):
         show_cursor = (int(cursor_timer * 2) % 2) == 0
         draw(show_cursor)
         for event in pygame.event.get():
+            if audio_overlay.handle_event(event):
+                continue
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()

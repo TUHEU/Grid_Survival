@@ -10,7 +10,7 @@ from host_waiting_screen import host_waiting_screen
 from lan_prompts import draw_lan_backdrop, prompt_host_or_join, prompt_ip_entry
 from network import NetworkClient, NetworkHost, get_local_ip
 from scenes import ModeSelectionScreen, PlayerSelectionScreen, TitleScreen
-from scenes.common import _draw_rounded_rect, _load_font
+from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 from settings import (
     FONT_PATH_BODY,
     FONT_PATH_HEADING,
@@ -22,7 +22,13 @@ from settings import (
 )
 
 
-def _draw_lobby_panel(screen, title: str, lines: list[str], accent=(180, 80, 255)):
+def _draw_lobby_panel(
+    screen,
+    title: str,
+    lines: list[str],
+    accent=(180, 80, 255),
+    audio_overlay: SceneAudioOverlay | None = None,
+):
     width, height = WINDOW_SIZE
     font_title = _load_font(FONT_PATH_HEADING, 32, bold=True)
     font_body = _load_font(FONT_PATH_BODY, 24)
@@ -56,11 +62,15 @@ def _draw_lobby_panel(screen, title: str, lines: list[str], accent=(180, 80, 255
         screen.blit(surf, surf.get_rect(center=(panel.centerx, y)))
         y += 38 if idx < 2 else 30
 
+    if audio_overlay is not None:
+        audio_overlay.draw(screen)
+
     pygame.display.flip()
 
 
 def _wait_for_online_match_start(screen, clock, network, player_name: str, character_name: str):
     local_setup = {"name": player_name, "character": character_name}
+    audio_overlay = SceneAudioOverlay()
     if not network.send_message("player_setup", **local_setup):
         return None
 
@@ -69,6 +79,8 @@ def _wait_for_online_match_start(screen, clock, network, player_name: str, chara
             return None
 
         for event in pygame.event.get():
+            if audio_overlay.handle_event(event):
+                continue
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
@@ -118,6 +130,7 @@ def _wait_for_online_match_start(screen, clock, network, player_name: str, chara
                 peer_line,
                 "Press ESC to cancel and go back.",
             ],
+            audio_overlay=audio_overlay,
         )
         clock.tick(30)
 

@@ -52,7 +52,7 @@ from settings import (
     FONT_SIZE_BODY,
     FONT_SIZE_SMALL,
 )
-from .common import _draw_rounded_rect, _load_font
+from .common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 
 
 class TitleScreen:
@@ -75,6 +75,7 @@ class TitleScreen:
         self.warning_timer = 0.0
         self._title_time = 0.0
         self._quit_requested = False
+        self._audio_overlay = SceneAudioOverlay()
 
         # Title letter animation
         self._letters = []
@@ -279,6 +280,7 @@ class TitleScreen:
         self._draw_controls_panel()
         self._draw_tutorial_button()
         self._draw_back_button()
+        self._audio_overlay.draw(self.screen)
 
     def _draw_controls_panel(self) -> None:
         panel_w = 420
@@ -407,6 +409,8 @@ class TitleScreen:
             dt = frame_clock.tick(target_fps) / 1000.0
             close_rect = pygame.Rect(panel_rect.right - 104, panel_rect.top + 10, 88, 30)
             for event in pygame.event.get():
+                if self._audio_overlay.handle_event(event):
+                    continue
                 if event.type == pygame.QUIT:
                     self._quit_requested = True
                     capture.release()
@@ -469,6 +473,8 @@ class TitleScreen:
             _draw_rounded_rect(self.screen, close_rect, close_bg, close_border, 2, 10)
             close_text = self._font_small.render("CLOSE", True, (245, 245, 245))
             self.screen.blit(close_text, close_text.get_rect(center=close_rect.center))
+
+            self._audio_overlay.draw(self.screen)
 
             pygame.display.flip()
 
@@ -540,6 +546,8 @@ class TitleScreen:
             self._update_shake(dt)
 
             for event in pygame.event.get():
+                if self._audio_overlay.handle_event(event):
+                    continue
                 if event.type == pygame.QUIT:
                     return None
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:

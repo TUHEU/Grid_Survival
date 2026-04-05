@@ -4,7 +4,7 @@ import sys
 import pygame
 
 from lan_prompts import draw_lan_backdrop
-from scenes.common import _draw_rounded_rect, _load_font
+from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 from settings import (
     FONT_PATH_BODY,
     FONT_PATH_HEADING,
@@ -19,6 +19,7 @@ def _draw_waiting_panel(
     *,
     accent=(180, 80, 255),
     success=False,
+    audio_overlay: SceneAudioOverlay | None = None,
 ):
     width, height = WINDOW_SIZE
     font_title = _load_font(FONT_PATH_HEADING, 34, bold=True)
@@ -54,11 +55,15 @@ def _draw_waiting_panel(
         screen.blit(surf, surf.get_rect(center=(panel.centerx, y)))
         y += 40 if idx == 0 else 30
 
+    if audio_overlay is not None:
+        audio_overlay.draw(screen)
+
     pygame.display.flip()
 
 
 def host_waiting_screen(screen, clock, host_ip, network):
     """Wait for a LAN client while keeping the host UI responsive."""
+    audio_overlay = SceneAudioOverlay()
     while True:
         connected = network.poll_connection()
         lines = [
@@ -71,6 +76,7 @@ def host_waiting_screen(screen, clock, host_ip, network):
             "Waiting For Player To Join",
             lines,
             accent=(180, 80, 255),
+            audio_overlay=audio_overlay,
         )
 
         if connected:
@@ -84,6 +90,7 @@ def host_waiting_screen(screen, clock, host_ip, network):
                         "Preparing the match lobby...",
                     ],
                     success=True,
+                    audio_overlay=audio_overlay,
                 )
                 clock.tick(30)
             return True
@@ -92,6 +99,8 @@ def host_waiting_screen(screen, clock, host_ip, network):
             return False
 
         for event in pygame.event.get():
+            if audio_overlay.handle_event(event):
+                continue
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()

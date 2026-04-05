@@ -43,7 +43,7 @@ from settings import (
     FONT_SIZE_BODY,
     FONT_SIZE_SMALL,
 )
-from .common import _draw_rounded_rect, _load_font
+from .common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 
 
 class ModeSelectionScreen:
@@ -74,6 +74,7 @@ class ModeSelectionScreen:
         self.width, self.height = WINDOW_SIZE
         self.back_requested = False
         self.quit_requested = False
+        self._audio_overlay = SceneAudioOverlay()
 
         # Font hierarchy
         self._font_heading = _load_font(FONT_PATH_HEADING, FONT_SIZE_HEADING, bold=True)
@@ -252,6 +253,8 @@ class ModeSelectionScreen:
         for card in self.cards:
             self._draw_card(card, mouse_pos)
 
+        self._audio_overlay.draw(self.screen)
+
     def _draw_animated_background(self) -> None:
         # Floating light particles.
         particle_surf = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
@@ -384,6 +387,8 @@ class ModeSelectionScreen:
             self._update_animations(dt)
 
             for event in pygame.event.get():
+                if self._audio_overlay.handle_event(event):
+                    continue
                 if event.type == pygame.QUIT:
                     self.quit_requested = True
                     return None
