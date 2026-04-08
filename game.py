@@ -260,6 +260,13 @@ class GameManager:
 
         if getattr(self, "paused", False):
             if keys[pygame.K_ESCAPE]:
+                if self.is_network_game and self.network and self.network.connected:
+                    self.network.send_message("disconnect")
+                self.running = False
+            elif keys[pygame.K_LCTRL]:
+                if self.is_network_game and self.network and self.network.connected:
+                    self.network.send_message("disconnect")
+                self.return_to_main_menu = True
                 self.running = False
             return
 
@@ -298,13 +305,19 @@ class GameManager:
             return
 
         if self.game_over:
+            if keys[pygame.K_LCTRL]:
+                if self.is_network_game and self.network and self.network.connected:
+                    self.network.send_message("disconnect")
+                self.return_to_main_menu = True
+                self.running = False
+
             if self.victory_screen:
                 self.victory_screen.update(dt)
             elif self.elimination_screen:
                 self.elimination_screen.update(dt)
             return
 
-        if self.paused:
+        if getattr(self, "paused", False) or self.paused:
             return
 
         self._time_since_start += dt
@@ -650,8 +663,12 @@ class GameManager:
             sub_text = font_small.render(f"Press TAB to Resume", True, (200, 200, 220))
             sub_rect = sub_text.get_rect(center=(WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2 + 50))
             
+            menu_text = font_small.render(f"To go to Main Menu, press Left Ctrl", True, (150, 150, 180))
+            menu_rect = menu_text.get_rect(center=(WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2 + 85))
+            
             self.screen.blit(text, text_rect)
             self.screen.blit(sub_text, sub_rect)
+            self.screen.blit(menu_text, menu_rect)
 
         pygame.display.flip()
 
@@ -1185,7 +1202,12 @@ class GameManager:
             self.audio.stop_music()
         if self.network:
             self.network.disconnect()
-        pygame.quit()
+            
+        if getattr(self, "return_to_main_menu", False):
+            return "main_menu"
+        else:
+            pygame.quit()
+            return "quit"
 
 
 # Backward compatibility for older imports.
