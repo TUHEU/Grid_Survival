@@ -72,8 +72,12 @@ class GameManager:
         self._pending_power_press = False
         self._remote_input_state = self._empty_network_input_state()
         self._authoritative_network_inputs = None
-        self._snapshot_send_timer = 1 / 20
-        self._snapshot_interval = 1 / 20
+        self._snapshot_send_timer = 1 / 30
+        self._snapshot_interval = 1 / 30
+        self._world_snapshot_send_timer = 0.0
+        self._world_snapshot_interval = 1 / 6
+        self._client_position_blend = 0.35
+        self._client_snap_distance = 180.0
         
         # Load assets
         self.background_surface = load_background_surface(WINDOW_SIZE)
@@ -462,13 +466,22 @@ class GameManager:
         if self.is_network_game and self.is_network_host:
             if self._snapshot_send_timer >= self._snapshot_interval:
                 self._snapshot_send_timer = 0.0
-                self.network.send_message("snapshot", state=self._build_network_snapshot())
+                self._world_snapshot_send_timer += self._snapshot_interval
+                include_world = self._world_snapshot_send_timer >= self._world_snapshot_interval
+                if include_world:
+                    self._world_snapshot_send_timer = 0.0
+                self.network.send_message(
+                    "snapshot",
+                    state=self._build_network_snapshot(include_world=include_world),
+                )
             self._pending_power_press = False
             self._authoritative_network_inputs = None
 
     def _update_client_network_game(self, dt: float):
         self.water.update(dt)
         self.orb_manager.advance_visuals(dt)
+        if self.pacman_enemy_manager:
+            self.pacman_enemy_manager.advance_visuals(dt)
         if self.elimination_screen:
             self.elimination_screen.update(dt)
         for player in self.players:
@@ -529,7 +542,42 @@ class GameManager:
             return self.players[self.local_player_index]
         return None
 
-    def _build_network_snapshot(self) -> dict:
+    def _blend_client_player_snapshot(self, player, player_state: dict) -> dict:
+        """Smooth host snapshots on the client to reduce visible jitter."""
+        if self.is_network_host or not isinstance(player_state, dict):
+            return player_state
+
+        try:
+            target = pygame.Vector2(
+                float(player_state.get("x", player.position.x)),
+                float(player_state.get("y", player.position.y)),
+            )
+        except (TypeError, ValueError):
+            return player_state
+
+        # Snap immediately during major state transitions to avoid desync artifacts.
+        if bool(player_state.get("falling", False)) != bool(getattr(player, "falling", False)):
+            return player_state
+        if bool(player_state.get("drowning", False)) != bool(getattr(player, "drowning", False)):
+            return player_state
+        if bool(player_state.get("eliminated", False)) != bool(getattr(player, "_eliminated", False)):
+            return player_state
+        if str(player_state.get("state", "")) == "death":
+            return player_state
+
+        current = pygame.Vector2(player.position)
+        distance = current.distance_to(target)
+        if distance > self._client_snap_distance:
+            return player_state
+
+        local_player = self._local_network_player()
+        blend = 0.58 if player is local_player else self._client_position_blend
+        blended = dict(player_state)
+        blended["x"] = current.x + (target.x - current.x) * blend
+        blended["y"] = current.y + (target.y - current.y) * blend
+        return blended
+
+    def _build_network_snapshot(self, include_world: bool = True) -> dict:
         end_state = None
         if self.game_over_state == "victory" and self.victory_screen:
             end_state = {
@@ -547,7 +595,7 @@ class GameManager:
                 "reason": self.elimination_screen.reason,
             }
 
-        return {
+        snapshot = {
             "time_since_start": float(self._time_since_start),
             "game_over": bool(self.game_over),
             "end_state": end_state,
@@ -558,16 +606,21 @@ class GameManager:
                 }
                 for player in self.players
             ],
-            "tiles": self.tile_manager.snapshot_state(),
-            "hazards": self.hazard_manager.snapshot_state(),
-            "orbs": self.orb_manager.snapshot_state(),
-            "pacman_enemies": (
-                self.pacman_enemy_manager.snapshot_state()
-                if self.pacman_enemy_manager
-                else None
-            ),
             "hud": self.hud.snapshot_state(),
         }
+
+        if include_world:
+            snapshot["tiles"] = self.tile_manager.snapshot_state()
+            snapshot["hazards"] = self.hazard_manager.snapshot_state()
+            snapshot["orbs"] = self.orb_manager.snapshot_state()
+
+        snapshot["pacman_enemies"] = (
+            self.pacman_enemy_manager.snapshot_state()
+            if self.pacman_enemy_manager
+            else None
+        )
+
+        return snapshot
 
     def _apply_network_snapshot(self, snapshot):
         if not isinstance(snapshot, dict):
@@ -591,7 +644,8 @@ class GameManager:
                 continue
             player_state = entry.get("player") or {}
             player = self.players[idx]
-            player.apply_snapshot_state(player_state)
+            blended_state = self._blend_client_player_snapshot(player, player_state)
+            player.apply_snapshot_state(blended_state)
             apply_power_state(player.power, entry.get("power"))
             if player_state.get("eliminated"):
                 self.eliminated_players.append(player)
@@ -959,7 +1013,8 @@ class GameManager:
         self._restart_game()
         if self.is_network_game and self.is_network_host and self.network and self.network.connected:
             self._snapshot_send_timer = 0.0
-            self.network.send_message("snapshot", state=self._build_network_snapshot())
+            self._world_snapshot_send_timer = 0.0
+            self.network.send_message("snapshot", state=self._build_network_snapshot(include_world=True))
 
     def _force_safe_spawns(self):
         """Clamp every player to a valid walkable tile and clear fall/drown flags."""

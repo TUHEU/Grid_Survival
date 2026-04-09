@@ -381,6 +381,11 @@ class PacmanEnemyManager:
                 victims.append(victim)
         return victims
 
+    def advance_visuals(self, dt: float) -> None:
+        """Advance animation timers on clients between host snapshots."""
+        for enemy in self.enemies:
+            enemy._anim_time += dt
+
     def snapshot_state(self) -> dict:
         """Serialize enemy state for LAN snapshot sync."""
         return {
@@ -409,10 +414,15 @@ class PacmanEnemyManager:
             if not isinstance(state, dict):
                 continue
 
-            enemy.position = pygame.Vector2(
+            target_position = pygame.Vector2(
                 float(state.get("x", enemy.position.x)),
                 float(state.get("y", enemy.position.y)),
             )
+            delta = target_position - enemy.position
+            if delta.length() > 180.0:
+                enemy.position = target_position
+            else:
+                enemy.position += delta * 0.45
             enemy.rect.center = (round(enemy.position.x), round(enemy.position.y))
 
             direction = pygame.Vector2(
