@@ -101,6 +101,7 @@ class GameHUD:
         # Timer urgency pulse
         self._pulse_timer = 0.0
 
+        self.pause_rect = None
         self.mute_rect = None   # Mute button hit area
         self.volume_rect = None
 
@@ -132,14 +133,49 @@ class GameHUD:
         remaining_in_minute = 60 - (self.survival_time % 60)
         return remaining_in_minute <= TIMER_WARNING_THRESHOLD
 
-    def draw(self, surface: pygame.Surface, players: List, is_muted: bool = False, volume: float = 1.0):
+    def draw(
+        self,
+        surface: pygame.Surface,
+        players: List,
+        is_muted: bool = False,
+        volume: float = 1.0,
+        is_paused: bool = False,
+    ):
         """Draw HUD elements."""
         self._draw_timer_panel(surface)
+        self._draw_pause_button(surface, is_paused)
         self._draw_mute_button(surface, is_muted)
         self._draw_volume_panel(surface, is_muted, volume)
         self._draw_player_cards(surface, players)
         if self.total_players > 1:
             self._draw_alive_panel(surface)
+
+    def _draw_pause_button(self, surface: pygame.Surface, is_paused: bool):
+        """Draw a clickable pause toggle button."""
+        label = "PAUSED" if is_paused else "PAUSE"
+        color = HUD_TIMER_URGENT_COLOR if is_paused else HUD_TIMER_BORDER_COLOR
+
+        label_surf = self._font_label.render(label, True, color)
+
+        panel_w = label_surf.get_width() + HUD_PANEL_PADDING_H * 2
+        panel_h = label_surf.get_height() + HUD_PANEL_PADDING_V * 2
+
+        self.pause_rect = pygame.Rect(0, WINDOW_SIZE[1] - panel_h - 20, panel_w, panel_h)
+        self.pause_rect.centerx = WINDOW_SIZE[0] // 2
+
+        _draw_panel(
+            surface,
+            self.pause_rect,
+            HUD_PANEL_BG,
+            color,
+            HUD_PANEL_BORDER_WIDTH,
+            8,
+            glow=False,
+        )
+
+        lx = self.pause_rect.centerx - label_surf.get_width() // 2
+        ly = self.pause_rect.centery - label_surf.get_height() // 2
+        surface.blit(label_surf, (lx, ly))
 
     def _draw_mute_button(self, surface: pygame.Surface, is_muted: bool):
         """Draw a clickable mute button."""

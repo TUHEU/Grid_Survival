@@ -228,6 +228,9 @@ class GameManager:
                 self.running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Left click
+                    if self.hud.pause_rect and self.hud.pause_rect.collidepoint(event.pos):
+                        self._toggle_pause()
+                        continue
                     if self.hud.mute_rect and self.hud.mute_rect.collidepoint(event.pos):
                         self.audio.toggle_mute()
                     elif self._handle_ninja_target_click(event.pos):
@@ -243,7 +246,8 @@ class GameManager:
                     self._adjust_audio_volume(-AUDIO_VOLUME_STEP)
                     continue
                 if event.key == pygame.K_TAB:
-                    self.paused = not getattr(self, "paused", False)
+                    self._toggle_pause()
+                    continue
                 elif event.key == pygame.K_l and not self.is_network_game:
                     for player in self.players:
                         player.reset()
@@ -269,6 +273,10 @@ class GameManager:
         self.audio.update()
 
         if getattr(self, "paused", False):
+            if self.is_network_game and self.network and self.network.connected:
+                self._process_network_messages()
+                if not self.running or not self.network.connected:
+                    return
             if keys[pygame.K_ESCAPE]:
                 if self.is_network_game and self.network and self.network.connected:
                     self.network.send_message("disconnect")
@@ -495,7 +503,11 @@ class GameManager:
             if message_type == "disconnect":
                 self.running = False
                 return
-            if self.is_network_host and message_type == "restart_request":
+            if message_type == "pause_state":
+                self.paused = bool(message.get("paused", False))
+            elif self.is_network_host and message_type == "pause_toggle_request":
+                self._toggle_pause()
+            elif self.is_network_host and message_type == "restart_request":
                 self._restart_network_round()
             elif self.is_network_host and message_type == "input_state":
                 self._remote_input_state = self._sanitize_network_input(message.get("input"))
@@ -541,6 +553,21 @@ class GameManager:
         if 0 <= self.local_player_index < len(self.players):
             return self.players[self.local_player_index]
         return None
+
+    def _send_pause_state(self):
+        if self.is_network_game and self.is_network_host and self.network and self.network.connected:
+            self.network.send_message("pause_state", paused=bool(self.paused))
+
+    def _toggle_pause(self):
+        if self.is_network_game:
+            if self.is_network_host:
+                self.paused = not bool(self.paused)
+                self._send_pause_state()
+            elif self.network and self.network.connected:
+                self.network.send_message("pause_toggle_request")
+            return
+
+        self.paused = not bool(self.paused)
 
     def _blend_client_player_snapshot(self, player, player_state: dict) -> dict:
         """Smooth host snapshots on the client to reduce visible jitter."""
@@ -597,6 +624,7 @@ class GameManager:
 
         snapshot = {
             "time_since_start": float(self._time_since_start),
+            "paused": bool(self.paused),
             "game_over": bool(self.game_over),
             "end_state": end_state,
             "players": [
@@ -627,6 +655,7 @@ class GameManager:
             return
 
         self._time_since_start = float(snapshot.get("time_since_start", self._time_since_start))
+        self.paused = bool(snapshot.get("paused", self.paused))
         self.tile_manager.apply_snapshot(snapshot.get("tiles"))
         self.walkable_mask = self.tile_manager.get_updated_walkable_mask(self.original_walkable_mask)
         self.hazard_manager.apply_snapshot(snapshot.get("hazards"))
@@ -714,7 +743,13 @@ class GameManager:
                 player.power.draw(self.screen, player)
 
         # Draw HUD
-        self.hud.draw(self.screen, self.players, is_muted=self.audio.is_muted, volume=self.audio.get_volume())
+        self.hud.draw(
+            self.screen,
+            self.players,
+            is_muted=self.audio.is_muted,
+            volume=self.audio.get_volume(),
+            is_paused=bool(self.paused),
+        )
 
         # Draw elimination screen if game over
         if self.victory_screen:
@@ -979,6 +1014,7 @@ class GameManager:
     def _restart_game(self):
         """Restart the game."""
         self.game_over = False
+        self.paused = False
         self.elimination_screen = None
         self.victory_screen = None
         self.game_over_state = None
