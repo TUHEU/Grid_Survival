@@ -56,6 +56,7 @@ class GameManager:
         local_player_index: int = 0,
         level_map_path: str | Path | None = None,
         level_background_path: str | Path | None = None,
+        target_score: int = 3,
     ):
         if screen is None or clock is None:
             pygame.init()
@@ -85,6 +86,11 @@ class GameManager:
         self._client_snap_distance = 180.0
         self.level_map_path = Path(level_map_path) if level_map_path else None
         self.level_background_path = Path(level_background_path) if level_background_path else None
+        self.target_score = max(1, int(target_score))
+        self.round_wins: list[int] = []
+        self._round_restart_delay = 2.0
+        self._round_restart_timer = 0.0
+        self._match_complete = False
         
         # Load assets
         self.background_surface = load_background_surface(
@@ -205,7 +211,9 @@ class GameManager:
             enemy_spawns = self._initial_pacman_enemy_spawns(enemy_count)
             self.pacman_enemy_manager = PacmanEnemyManager(enemy_spawns)
 
+        self.round_wins = [0 for _ in self.players]
         self.hud.set_player_info(player_name, len(self.players), len(self.players))
+        self.hud.set_round_scoreboard(self.round_wins, self.target_score)
 
         self.game_over = False
         self.audio = get_audio()
@@ -246,13 +254,14 @@ class GameManager:
                     for player in self.players:
                         player.reset()
                 elif event.key == pygame.K_r and self.game_over:
+                    reset_match = bool(self._match_complete)
                     if self.is_network_game:
                         if self.is_network_host:
-                            self._restart_network_round()
+                            self._restart_network_round(reset_match=reset_match)
                         elif self.network and self.network.connected:
-                            self.network.send_message("restart_request")
+                            self.network.send_message("restart_request", reset_match=reset_match)
                     else:
-                        self._restart_game()
+                        self._restart_game(reset_match=reset_match)
                     continue
                 else:
                     if self.is_network_game:
@@ -313,7 +322,7 @@ class GameManager:
         # Hidden first-frame restart to ensure AI is visible on first launch
         if self._pending_initial_restart:
             self._pending_initial_restart = False
-            self._restart_game()
+            self._restart_game(reset_match=True)
             return
 
         if self.game_over:
@@ -327,6 +336,15 @@ class GameManager:
                 self.victory_screen.update(dt)
             elif self.elimination_screen:
                 self.elimination_screen.update(dt)
+
+            if len(self.players) > 1 and not self._match_complete:
+                self._round_restart_timer += dt
+                if self._round_restart_timer >= self._round_restart_delay:
+                    if self.is_network_game:
+                        if self.is_network_host:
+                            self._restart_network_round(reset_match=False)
+                    else:
+                        self._restart_game(reset_match=False)
             return
 
         if getattr(self, "paused", False) or self.paused:
@@ -455,7 +473,7 @@ class GameManager:
             )
             winner = self.players[winner_index] if self.players else None
             winner_label = getattr(winner, "character_name", self.player_name) if winner else self.player_name
-            self._trigger_victory(f"P{winner_index + 1} - {winner_label} WINS", winner_label)
+            self._handle_round_victory(winner_index, winner_label)
             return
 
         platform_empty = not self._any_player_on_platform()
@@ -502,7 +520,7 @@ class GameManager:
             elif self.is_network_host and message_type == "pause_toggle_request":
                 self._toggle_pause()
             elif self.is_network_host and message_type == "restart_request":
-                self._restart_network_round()
+                self._restart_network_round(reset_match=bool(message.get("reset_match", False)))
             elif self.is_network_host and message_type == "input_state":
                 self._remote_input_state = self._sanitize_network_input(message.get("input"))
             elif (not self.is_network_host) and message_type == "snapshot":
@@ -620,6 +638,9 @@ class GameManager:
             "time_since_start": float(self._time_since_start),
             "paused": bool(self.paused),
             "game_over": bool(self.game_over),
+            "target_score": int(self.target_score),
+            "round_wins": [int(value) for value in self.round_wins],
+            "match_complete": bool(self._match_complete),
             "end_state": end_state,
             "players": [
                 {
@@ -650,6 +671,15 @@ class GameManager:
 
         self._time_since_start = float(snapshot.get("time_since_start", self._time_since_start))
         self.paused = bool(snapshot.get("paused", self.paused))
+        self.target_score = max(1, int(snapshot.get("target_score", self.target_score)))
+        incoming_round_wins = snapshot.get("round_wins", self.round_wins)
+        if isinstance(incoming_round_wins, list):
+            self.round_wins = [int(max(0, value)) for value in incoming_round_wins]
+        if len(self.round_wins) < len(self.players):
+            self.round_wins.extend([0] * (len(self.players) - len(self.round_wins)))
+        elif len(self.round_wins) > len(self.players):
+            self.round_wins = self.round_wins[: len(self.players)]
+        self._match_complete = bool(snapshot.get("match_complete", self._match_complete))
         self.tile_manager.apply_snapshot(snapshot.get("tiles"))
         self.walkable_mask = self.tile_manager.get_updated_walkable_mask(self.original_walkable_mask)
         self.hazard_manager.apply_snapshot(snapshot.get("hazards"))
@@ -657,6 +687,7 @@ class GameManager:
         if self.pacman_enemy_manager:
             self.pacman_enemy_manager.apply_snapshot(snapshot.get("pacman_enemies"))
         self.hud.apply_snapshot(snapshot.get("hud"))
+        self.hud.set_round_scoreboard(self.round_wins, self.target_score)
 
         self.eliminated_players.clear()
         self.victory_screen = None
@@ -980,6 +1011,8 @@ class GameManager:
         if not self.game_over:
             self.game_over = True
             self.game_over_state = "elimination"
+            self._match_complete = False
+            self._round_restart_timer = 0.0
             self.victory_screen = None
             
             char_name = getattr(self.player, "character_name", "Caveman") if hasattr(self, "player") and self.player else "Caveman"
@@ -999,19 +1032,41 @@ class GameManager:
         if not self.game_over:
             self.game_over = True
             self.game_over_state = "victory"
+            self._round_restart_timer = 0.0
             self.elimination_screen = None
             self.victory_screen = VictoryScreen(winner_name, self.hud.survival_time, character_name)
             self.victory_screen.show()
             if self.is_network_game and self.is_network_host and self.network and self.network.connected:
                 self.network.send_message("snapshot", state=self._build_network_snapshot())
 
-    def _restart_game(self):
+    def _handle_round_victory(self, winner_index: int, winner_label: str):
+        """Count the round winner and decide whether the match is complete."""
+        if not self.players:
+            return
+
+        winner_index = max(0, min(len(self.players) - 1, int(winner_index)))
+        if len(self.round_wins) != len(self.players):
+            self.round_wins = [0 for _ in self.players]
+
+        self.round_wins[winner_index] += 1
+        self.hud.set_round_scoreboard(self.round_wins, self.target_score)
+        self._round_restart_timer = 0.0
+        self._match_complete = self.round_wins[winner_index] >= self.target_score
+
+        result_suffix = "WINS MATCH" if self._match_complete else "WINS ROUND"
+        self._trigger_victory(f"P{winner_index + 1} - {winner_label} {result_suffix}", winner_label)
+
+    def _restart_game(self, reset_match: bool = False):
         """Restart the game."""
         self.game_over = False
         self.paused = False
         self.elimination_screen = None
         self.victory_screen = None
         self.game_over_state = None
+        self._match_complete = False
+        self._round_restart_timer = 0.0
+        if reset_match or len(self.round_wins) != len(self.players):
+            self.round_wins = [0 for _ in self.players]
         self.eliminated_players.clear()
         self._pending_power_press = False
         self._remote_input_state = self._empty_network_input_state()
@@ -1037,10 +1092,11 @@ class GameManager:
         self._force_safe_spawns()
         self._configure_powers_for_players()
         self.hud.set_player_info(self.player_name, len(self.players), len(self.players))
+        self.hud.set_round_scoreboard(self.round_wins, self.target_score)
 
-    def _restart_network_round(self):
+    def _restart_network_round(self, reset_match: bool = False):
         """Host-authoritative restart path for LAN games."""
-        self._restart_game()
+        self._restart_game(reset_match=reset_match)
         if self.is_network_game and self.is_network_host and self.network and self.network.connected:
             self._snapshot_send_timer = 0.0
             self._world_snapshot_send_timer = 0.0

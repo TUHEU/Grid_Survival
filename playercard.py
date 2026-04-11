@@ -46,11 +46,12 @@ CARD_WIDTH = 282
 CARD_HEIGHT = 164
 CARD_MARGIN_X = 20
 CARD_MARGIN_Y = 18
-CARD_ROW_GAP = 16
+CARD_ROW_GAP = 46
 CARD_STATUS_BG = (18, 22, 34, 220)
 CARD_STATUS_BORDER = (92, 112, 150)
 CARD_TEXT_DIM = (190, 200, 215)
 CARD_TEXT_FAINT = (145, 155, 175)
+CARD_WINS_BG = (16, 22, 36, 228)
 
 
 class PlayerCardRenderer:
@@ -66,17 +67,28 @@ class PlayerCardRenderer:
         self._orb_icon_cache: dict[tuple[str, int], pygame.Surface] = {}
         self._portrait_cache: dict[tuple[str, int], pygame.Surface] = {}
 
-    def draw(self, surface: pygame.Surface, players: List) -> None:
+    def draw(
+        self,
+        surface: pygame.Surface,
+        players: List,
+        round_wins: Optional[List[int]] = None,
+        target_score: int = 1,
+    ) -> None:
         if not players:
             return
         render_players = list(players)
+        rounds = round_wins if isinstance(round_wins, list) else []
+        safe_target = max(1, int(target_score))
         card_w, card_h = CARD_WIDTH, CARD_HEIGHT
         rects = self._player_card_rects(len(render_players), card_w, card_h)
         for idx, player in enumerate(render_players):
             if idx >= len(rects):
                 break
             border_color = CARD_COLOR_PALETTE[idx % len(CARD_COLOR_PALETTE)]
-            self._draw_player_card(surface, rects[idx], player, idx, border_color)
+            wins = int(max(0, rounds[idx])) if idx < len(rounds) else 0
+            self._draw_player_card(surface, rects[idx], player, idx, border_color, wins, safe_target)
+            eliminated = bool(getattr(player, "_eliminated", False))
+            self._draw_wins_footer(surface, rects[idx], wins, safe_target, border_color, eliminated)
 
     def _player_card_rects(self, count: int, width: int, height: int) -> List[pygame.Rect]:
         rects: List[pygame.Rect] = []
@@ -100,7 +112,16 @@ class PlayerCardRenderer:
                 rects.append(pygame.Rect(x, y, width, height))
         return rects
 
-    def _draw_player_card(self, surface: pygame.Surface, rect: pygame.Rect, player, index: int, border_color: tuple) -> None:
+    def _draw_player_card(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        player,
+        index: int,
+        border_color: tuple,
+        round_wins: int,
+        target_score: int,
+    ) -> None:
         if player is None:
             return
         eliminated = bool(getattr(player, "_eliminated", False))
@@ -169,6 +190,33 @@ class PlayerCardRenderer:
 
         if eliminated:
             self._draw_eliminated_overlay(surface, rect)
+
+    def _draw_wins_footer(
+        self,
+        surface: pygame.Surface,
+        card_rect: pygame.Rect,
+        round_wins: int,
+        target_score: int,
+        border_color: tuple,
+        eliminated: bool,
+    ) -> None:
+        """Draw a clear round-score strip under each player card."""
+        footer_rect = pygame.Rect(
+            card_rect.left + 28,
+            card_rect.bottom + 8,
+            card_rect.width - 56,
+            24,
+        )
+        win_border = (130, 130, 145) if eliminated else border_color
+        win_text = f"WINS: {max(0, int(round_wins))}/{max(1, int(target_score))}"
+        self._draw_badge(
+            surface,
+            footer_rect,
+            CARD_WINS_BG,
+            win_border,
+            win_text,
+            (245, 250, 255),
+        )
 
     def _draw_eliminated_overlay(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)

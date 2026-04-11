@@ -97,6 +97,8 @@ class GameHUD:
         self.player_name = "Player"
         self.players_alive = 1
         self.total_players = 1
+        self.round_wins: list[int] = []
+        self.target_score = 1
 
         # Timer urgency pulse
         self._pulse_timer = 0.0
@@ -306,7 +308,12 @@ class GameHUD:
         surface.blit(value_surf, (vx, vy))
 
     def _draw_player_cards(self, surface: pygame.Surface, players: List):
-        self._player_cards.draw(surface, players)
+        self._player_cards.draw(
+            surface,
+            players,
+            round_wins=self.round_wins,
+            target_score=self.target_score,
+        )
 
     def reset(self):
         """Reset HUD state."""
@@ -321,6 +328,10 @@ class GameHUD:
         self.players_alive = alive
         self.total_players = total
 
+    def set_round_scoreboard(self, round_wins: list[int], target_score: int):
+        self.round_wins = [int(max(0, value)) for value in round_wins]
+        self.target_score = max(1, int(target_score))
+
     def snapshot_state(self) -> dict:
         """Serialize HUD values for LAN clients."""
         return {
@@ -329,6 +340,8 @@ class GameHUD:
             "player_name": self.player_name,
             "players_alive": int(self.players_alive),
             "total_players": int(self.total_players),
+            "round_wins": [int(value) for value in self.round_wins],
+            "target_score": int(self.target_score),
         }
 
     def apply_snapshot(self, snapshot: dict | None):
@@ -341,6 +354,10 @@ class GameHUD:
         self.player_name = str(snapshot.get("player_name", self.player_name))
         self.players_alive = int(snapshot.get("players_alive", self.players_alive))
         self.total_players = int(snapshot.get("total_players", self.total_players))
+        wins = snapshot.get("round_wins", self.round_wins)
+        if isinstance(wins, list):
+            self.round_wins = [int(max(0, value)) for value in wins]
+        self.target_score = max(1, int(snapshot.get("target_score", self.target_score)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

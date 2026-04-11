@@ -8,7 +8,13 @@ from game import GameManager
 from host_waiting_screen import host_waiting_screen
 from lan_prompts import draw_lan_backdrop, prompt_host_or_join, prompt_ip_entry, toast_message
 from network import NetworkClient, NetworkHost, get_local_ip
-from scenes import LevelSelectionScreen, ModeSelectionScreen, PlayerSelectionScreen, TitleScreen
+from scenes import (
+    LevelSelectionScreen,
+    ModeSelectionScreen,
+    PlayerSelectionScreen,
+    TargetScoreSelectionScreen,
+    TitleScreen,
+)
 from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 from scenes.level_selection import resolve_level_option
 from settings import (
@@ -75,6 +81,7 @@ def _wait_for_online_match_start(
     player_name: str,
     character_name: str,
     selected_level_id: int,
+    selected_target_score: int,
 ):
     local_setup = {"name": player_name, "character": character_name}
     audio_overlay = SceneAudioOverlay()
@@ -111,11 +118,13 @@ def _wait_for_online_match_start(
                     players=players,
                     local_player_index=1,
                     level_id=int(selected_level_id),
+                    target_score=int(selected_target_score),
                 )
                 return {
                     "players": players,
                     "local_player_index": 0,
                     "level_id": int(selected_level_id),
+                    "target_score": int(selected_target_score),
                 }
 
             if (not network.is_host) and message_type == "game_start":
@@ -126,6 +135,7 @@ def _wait_for_online_match_start(
                     "players": players[:2],
                     "local_player_index": int(message.get("local_player_index", 1)),
                     "level_id": int(message.get("level_id", selected_level_id)),
+                    "target_score": int(message.get("target_score", selected_target_score)),
                 }
 
         title = "PLAY OVER LAN" if network.is_host else "JOINING OVER LAN"
@@ -167,12 +177,29 @@ def main():
                     return
                 break
 
-            level_screen = LevelSelectionScreen(screen, clock, game_mode)
-            selected_level = level_screen.run()
+            selected_level = None
+            selected_target_score = 3
+            while True:
+                level_screen = LevelSelectionScreen(screen, clock, game_mode)
+                selected_level = level_screen.run()
+                if selected_level is None:
+                    if getattr(level_screen, "quit_requested", False):
+                        pygame.quit()
+                        return
+                    break
+
+                target_score_screen = TargetScoreSelectionScreen(screen, clock)
+                selected_target_score = target_score_screen.run()
+                if selected_target_score is None:
+                    if getattr(target_score_screen, "quit_requested", False):
+                        pygame.quit()
+                        return
+                    continue
+
+                selected_target_score = max(1, int(selected_target_score))
+                break
+
             if selected_level is None:
-                if getattr(level_screen, "quit_requested", False):
-                    pygame.quit()
-                    return
                 continue
 
             network = None
@@ -232,6 +259,7 @@ def main():
                         player_name,
                         selected_characters[0],
                         selected_level.level_id,
+                        selected_target_score,
                     )
                     if not match_setup:
                         network.disconnect()
@@ -244,6 +272,10 @@ def main():
                     selected_level = resolve_level_option(
                         int(match_setup.get("level_id", selected_level.level_id))
                     ) or selected_level
+                    selected_target_score = max(
+                        1,
+                        int(match_setup.get("target_score", selected_target_score)),
+                    )
 
                 get_audio().stop_music(fade_ms=500)
 
@@ -257,6 +289,7 @@ def main():
                     local_player_index=local_player_index,
                     level_map_path=selected_level.map_path,
                     level_background_path=selected_level.background_path,
+                    target_score=selected_target_score,
                 ).run()
                 
                 if result == "main_menu":
