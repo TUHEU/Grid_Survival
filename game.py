@@ -142,10 +142,18 @@ class GameManager:
         self._time_since_start = 0.0
         self._pending_initial_restart = (self.game_mode == MODE_CAMPAIGN and USE_AI_PLAYER)
         if self.game_mode == MODE_CAMPAIGN:
+            custom_controls = load_custom_controls()
+            if custom_controls is None:
+                custom_controls = {
+                    "player1": dict(DEFAULT_CONTROLS["player1"]),
+                    "player2": dict(DEFAULT_CONTROLS["player2"]),
+                }
+            player1_controls = dict(custom_controls.get("player1", DEFAULT_CONTROLS["player1"]))
             primary_char = self._character_choice(0)
             self.players.append(
                 Player(
                     position=next(spawn_positions, PLAYER_START_POS),
+                    controls=player1_controls,
                     character_name=primary_char,
                 )
             )
