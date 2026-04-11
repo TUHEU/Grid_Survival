@@ -254,6 +254,8 @@ class GameManager:
                     for player in self.players:
                         player.reset()
                 elif event.key == pygame.K_r and self.game_over:
+                    if not self._can_use_end_of_match_actions():
+                        continue
                     reset_match = bool(self._match_complete)
                     if self.is_network_game:
                         if self.is_network_host:
@@ -291,7 +293,7 @@ class GameManager:
                 self.running = False
             return
 
-        if keys[pygame.K_ESCAPE]:
+        if keys[pygame.K_ESCAPE] and (not self.game_over or self._can_use_end_of_match_actions()):
             if self.is_network_game and self.network and self.network.connected:
                 self.network.send_message("disconnect")
             self.running = False
@@ -326,7 +328,7 @@ class GameManager:
             return
 
         if self.game_over:
-            if keys[pygame.K_LCTRL]:
+            if self._can_use_end_of_match_actions() and keys[pygame.K_LCTRL]:
                 if self.is_network_game and self.network and self.network.connected:
                     self.network.send_message("disconnect")
                 self.return_to_main_menu = True
@@ -1026,6 +1028,10 @@ class GameManager:
                 return True
         return False
 
+    def _can_use_end_of_match_actions(self) -> bool:
+        """Allow restart/quit/menu shortcuts only on final match end screens."""
+        return bool(self._match_complete or len(self.players) <= 1)
+
     def _trigger_game_over(self):
         """Trigger game over state."""
         self._trigger_elimination()
@@ -1040,12 +1046,16 @@ class GameManager:
             self.victory_screen = None
             
             char_name = getattr(self.player, "character_name", "Caveman") if hasattr(self, "player") and self.player else "Caveman"
+            allow_actions = self._can_use_end_of_match_actions()
+            status_text = None if allow_actions else "Next round starts automatically..."
             
             self.elimination_screen = EliminationScreen(
                 self.player_name,
                 self.hud.survival_time,
                 "eliminated",
-                char_name
+                char_name,
+                allow_actions=allow_actions,
+                status_message=status_text,
             )
             self.elimination_screen.show()
             if self.is_network_game and self.is_network_host and self.network and self.network.connected:
@@ -1058,7 +1068,15 @@ class GameManager:
             self.game_over_state = "victory"
             self._round_restart_timer = 0.0
             self.elimination_screen = None
-            self.victory_screen = VictoryScreen(winner_name, self.hud.survival_time, character_name)
+            allow_actions = self._can_use_end_of_match_actions()
+            status_text = None if allow_actions else "Next round starts automatically..."
+            self.victory_screen = VictoryScreen(
+                winner_name,
+                self.hud.survival_time,
+                character_name,
+                allow_actions=allow_actions,
+                status_message=status_text,
+            )
             self.victory_screen.show()
             if self.is_network_game and self.is_network_host and self.network and self.network.connected:
                 self.network.send_message("snapshot", state=self._build_network_snapshot())

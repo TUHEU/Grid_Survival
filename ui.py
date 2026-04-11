@@ -367,11 +367,21 @@ class GameHUD:
 class EliminationScreen:
     """Screen shown when player is eliminated."""
 
-    def __init__(self, player_name: str, survival_time: float, reason: str = "eliminated", character_name: str = "Caveman"):
+    def __init__(
+        self,
+        player_name: str,
+        survival_time: float,
+        reason: str = "eliminated",
+        character_name: str = "Caveman",
+        allow_actions: bool = True,
+        status_message: str | None = None,
+    ):
         self.player_name = player_name
         self.survival_time = survival_time
         self.reason = reason
         self.character_name = character_name
+        self.allow_actions = bool(allow_actions)
+        self.status_message = status_message or "Next round starts automatically..."
 
         self.portrait = None
         try:
@@ -491,22 +501,31 @@ class EliminationScreen:
         time_surf.set_alpha(text_alpha)
         surface.blit(time_surf, time_surf.get_rect(center=(text_cx, panel_rect.top + 150)))
 
-        # Restart prompt (blinks after fully faded in)
+        # Bottom prompt (actions only at final match end)
         if self.alpha >= 220:
             blink_alpha = int(120 + 135 * abs(math.sin(self._time * math.pi * 1.5)))
-            restart_surf = self.font_small.render(
-                "Press  R  to Restart    |    Press  ESC  to Quit",
-                True, (180, 180, 180)
-            )
-            restart_surf.set_alpha(blink_alpha)
-            surface.blit(restart_surf, restart_surf.get_rect(center=(cx, panel_rect.bottom - 50)))
+            if self.allow_actions:
+                restart_surf = self.font_small.render(
+                    "Press  R  to Restart    |    Press  ESC  to Quit",
+                    True, (180, 180, 180)
+                )
+                restart_surf.set_alpha(blink_alpha)
+                surface.blit(restart_surf, restart_surf.get_rect(center=(cx, panel_rect.bottom - 50)))
 
-            menu_surf = self.font_small.render(
-                "To go to Main Menu, press Left Ctrl",
-                True, (150, 150, 180)
-            )
-            menu_surf.set_alpha(blink_alpha)
-            surface.blit(menu_surf, menu_surf.get_rect(center=(cx, panel_rect.bottom - 20)))
+                menu_surf = self.font_small.render(
+                    "To go to Main Menu, press Left Ctrl",
+                    True, (150, 150, 180)
+                )
+                menu_surf.set_alpha(blink_alpha)
+                surface.blit(menu_surf, menu_surf.get_rect(center=(cx, panel_rect.bottom - 20)))
+            else:
+                wait_surf = self.font_small.render(
+                    self.status_message,
+                    True,
+                    (190, 200, 220),
+                )
+                wait_surf.set_alpha(blink_alpha)
+                surface.blit(wait_surf, wait_surf.get_rect(center=(cx, panel_rect.bottom - 30)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -516,10 +535,19 @@ class EliminationScreen:
 class VictoryScreen:
     """Screen shown when player wins (survives longest in multiplayer)."""
 
-    def __init__(self, player_name: str, survival_time: float, character_name: str = "Caveman"):
+    def __init__(
+        self,
+        player_name: str,
+        survival_time: float,
+        character_name: str = "Caveman",
+        allow_actions: bool = True,
+        status_message: str | None = None,
+    ):
         self.player_name = player_name
         self.survival_time = survival_time
         self.character_name = character_name
+        self.allow_actions = bool(allow_actions)
+        self.status_message = status_message or "Next round starts automatically..."
 
         self.portrait = None
         try:
@@ -627,16 +655,25 @@ class VictoryScreen:
 
         if self.alpha >= 220:
             blink_alpha = int(120 + 135 * abs(math.sin(self._time * math.pi * 1.5)))
-            restart_surf = self.font_small.render(
-                "Press  R  to Restart    |    Press  ESC  to Quit",
-                True, (180, 180, 180)
-            )
-            restart_surf.set_alpha(blink_alpha)
-            surface.blit(restart_surf, restart_surf.get_rect(center=(cx, panel_rect.bottom - 50)))
+            if self.allow_actions:
+                restart_surf = self.font_small.render(
+                    "Press  R  to Restart    |    Press  ESC  to Quit",
+                    True, (180, 180, 180)
+                )
+                restart_surf.set_alpha(blink_alpha)
+                surface.blit(restart_surf, restart_surf.get_rect(center=(cx, panel_rect.bottom - 50)))
 
-            menu_surf = self.font_small.render(
-                "To go to Main Menu, press Left Ctrl",
-                True, (150, 150, 180)
-            )
-            menu_surf.set_alpha(blink_alpha)
-            surface.blit(menu_surf, menu_surf.get_rect(center=(cx, panel_rect.bottom - 20)))
+                menu_surf = self.font_small.render(
+                    "To go to Main Menu, press Left Ctrl",
+                    True, (150, 150, 180)
+                )
+                menu_surf.set_alpha(blink_alpha)
+                surface.blit(menu_surf, menu_surf.get_rect(center=(cx, panel_rect.bottom - 20)))
+            else:
+                wait_surf = self.font_small.render(
+                    self.status_message,
+                    True,
+                    (190, 200, 220),
+                )
+                wait_surf.set_alpha(blink_alpha)
+                surface.blit(wait_surf, wait_surf.get_rect(center=(cx, panel_rect.bottom - 30)))
