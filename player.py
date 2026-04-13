@@ -28,10 +28,14 @@ from settings import (
     POWER_ORBS_REQUIRED,
     ORB_SHIELD_WARNING,
     SHIELD_EFFECT_PATH,
+    VOID_WALK_WING_PATH,
 )
 
 
 _SHIELD_EFFECT_SURFACE: pygame.Surface | None = None
+_VOID_WALK_WING_CACHE: dict[
+    int, tuple[list[pygame.Surface], list[pygame.Surface], list[pygame.Surface], list[pygame.Surface]]
+] = {}
 
 
 def _get_shield_effect_surface() -> pygame.Surface | None:
@@ -46,6 +50,57 @@ def _get_shield_effect_surface() -> pygame.Surface | None:
     else:
         _SHIELD_EFFECT_SURFACE = None
     return _SHIELD_EFFECT_SURFACE
+
+
+def _get_void_walk_wing_frames(
+    target_size: int,
+) -> tuple[list[pygame.Surface], list[pygame.Surface], list[pygame.Surface], list[pygame.Surface]] | None:
+    """
+    Returns (left_light, right_light, left_dark, right_dark) where each is [frame0, frame1].
+    Uses the bundled CC0 wing spritesheet (2x2 of 32x32 cells).
+    """
+    target_size = int(target_size)
+    if target_size <= 0:
+        return None
+
+    cached = _VOID_WALK_WING_CACHE.get(target_size)
+    if cached is not None:
+        return cached
+
+    if not VOID_WALK_WING_PATH or not VOID_WALK_WING_PATH.exists():
+        return None
+
+    try:
+        sheet = pygame.image.load(VOID_WALK_WING_PATH.as_posix()).convert_alpha()
+    except Exception:
+        return None
+
+    cell = 32
+    if sheet.get_width() < cell * 2 or sheet.get_height() < cell * 2:
+        return None
+
+    def extract(col: int, row: int) -> pygame.Surface:
+        frame = pygame.Surface((cell, cell), pygame.SRCALPHA)
+        frame.blit(sheet, (0, 0), (col * cell, row * cell, cell, cell))
+        if target_size != cell:
+            frame = pygame.transform.smoothscale(frame, (target_size, target_size))
+        return frame
+
+    def tint_black(src: pygame.Surface) -> pygame.Surface:
+        out = src.copy()
+        tint = pygame.Surface(out.get_size(), pygame.SRCALPHA)
+        tint.fill((0, 0, 0, 255))
+        out.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        return out
+
+    # Column 0 = left wing, Column 1 = right wing; Row 0/1 = flap frames.
+    left_light = [extract(0, 0), extract(0, 1)]
+    right_light = [extract(1, 0), extract(1, 1)]
+    left_dark = [tint_black(frame) for frame in left_light]
+    right_dark = [tint_black(frame) for frame in right_light]
+
+    _VOID_WALK_WING_CACHE[target_size] = (left_light, right_light, left_dark, right_dark)
+    return _VOID_WALK_WING_CACHE[target_size]
 
 
 class Player:
@@ -472,8 +527,6 @@ class Player:
     def draw(self, surface: pygame.Surface):
         death_alpha = self._death_fade_alpha if self.state == "death" else 255
         render_alpha = min(self._power_alpha, death_alpha)
-        if self._has_phase_orb_blink():
-            render_alpha = self._phase_blink_alpha(render_alpha)
         if render_alpha <= 0:
             return
 
@@ -493,11 +546,23 @@ class Player:
         # Apply Z-offset to draw position
         draw_rect = self.rect.copy()
         draw_rect.y -= round(self.z)
+
+        wing_blits_behind: list[tuple[pygame.Surface, tuple[int, int]]] = []
+        wing_blits_front: list[tuple[pygame.Surface, tuple[int, int]]] = []
+        if self._has_void_walk_wings():
+            wing_blits_behind, wing_blits_front = self._void_walk_wing_blits(
+                draw_rect, render_alpha / 255.0
+            )
+            for wing_surface, wing_pos in wing_blits_behind:
+                surface.blit(wing_surface, wing_pos)
         frame = self.current_animation.image
         if render_alpha != 255:
             frame = frame.copy()
             frame.set_alpha(render_alpha)
         surface.blit(frame, draw_rect.topleft)
+
+        for wing_surface, wing_pos in wing_blits_front:
+            surface.blit(wing_surface, wing_pos)
 
         death_opacity = death_alpha / 255.0
         if self._has_speed_orb_glow():
@@ -826,7 +891,7 @@ class Player:
 
         return self._active_orb_indefinite or self._active_orb_timer > 0.0
 
-    def _has_phase_orb_blink(self) -> bool:
+    def _has_void_walk_wings(self) -> bool:
         if self.state == "death":
             return False
 
@@ -838,11 +903,84 @@ class Player:
 
         return self._active_orb_indefinite or self._active_orb_timer > 0.0
 
-    def _phase_blink_alpha(self, base_alpha: int) -> int:
-        # Fast alpha pulse creates a clear phasing blink effect.
-        pulse = 0.5 + 0.5 * math.sin(self._status_flash_timer * math.pi * 8.0)
-        phase_alpha = int(65 + 190 * pulse)
-        return max(0, min(int(base_alpha), phase_alpha))
+    def _void_walk_wing_blits(self, draw_rect: pygame.Rect, opacity_scale: float = 1.0):
+        alpha = max(0, min(255, int(255 * opacity_scale)))
+        if alpha <= 0:
+            return [], []
+
+        wing_size = int(max(draw_rect.width, draw_rect.height) * 0.55)
+        wing_size = max(18, min(72, wing_size))
+        frames = _get_void_walk_wing_frames(wing_size)
+        if frames is None:
+            return [], []
+
+        left_light, right_light, left_dark, right_dark = frames
+        frame_idx = int(self._status_flash_timer * 10.0) % 2
+
+        # For side-facing sprites, tint the far wing to help it read as "behind" the body.
+        if self.facing == "left":
+            left = left_light[frame_idx]
+            right = right_dark[frame_idx]
+        elif self.facing == "right":
+            left = left_dark[frame_idx]
+            right = right_light[frame_idx]
+        else:
+            left = left_dark[frame_idx]
+            right = right_light[frame_idx]
+
+        # Fold the wings so they cling to the player's back (angel-like).
+        openness = 0.5 + 0.5 * math.sin(self._status_flash_timer * 6.2)
+        openness = 0.20 + 0.80 * openness  # 0.20..1.00
+        angle = 30.0 - 14.0 * openness     # ~16..30 degrees
+        scale = 0.78 + 0.08 * openness
+        squash = 0.78 + 0.12 * openness    # keep wings visible while tucked
+
+        try:
+            left = pygame.transform.rotozoom(left, angle, scale)
+            right = pygame.transform.rotozoom(right, -angle, scale)
+
+            # Squash width to look like the wings are tucked against the back (but still readable).
+            lw, lh = left.get_size()
+            rw, rh = right.get_size()
+            left = pygame.transform.smoothscale(left, (max(1, int(lw * squash)), lh))
+            right = pygame.transform.smoothscale(right, (max(1, int(rw * squash)), rh))
+        except Exception:
+            pass
+
+        if alpha != 255:
+            left = left.copy()
+            right = right.copy()
+            left.set_alpha(alpha)
+            right.set_alpha(alpha)
+
+        # Anchor at upper-back / shoulders (close to spine), using the visible-pixels bounds
+        # so direction sprites with extra padding still line up.
+        body = None
+        try:
+            body = self.current_animation.image.get_bounding_rect(min_alpha=10)
+        except Exception:
+            body = None
+        if not body or body.width <= 0 or body.height <= 0:
+            body = pygame.Rect(0, 0, draw_rect.width, draw_rect.height)
+
+        anchor_x = draw_rect.left + body.centerx
+        anchor_y = draw_rect.top + body.top + int(body.height * 0.36)
+        spine_offset = max(2, int(body.width * 0.06))
+
+        # When running sideways, shift the wings toward the back of the sprite so they don't
+        # "float" around the midline.
+        if self.facing in ("left", "right"):
+            back_shift = max(0, int(body.width * 0.08))
+            anchor_x += back_shift if self.facing == "left" else -back_shift
+
+        left_rect = left.get_rect(center=(anchor_x - spine_offset, anchor_y))
+        right_rect = right.get_rect(center=(anchor_x + spine_offset, anchor_y))
+
+        if self.facing == "left":
+            return [(right, right_rect.topleft)], [(left, left_rect.topleft)]
+        if self.facing == "right":
+            return [(left, left_rect.topleft)], [(right, right_rect.topleft)]
+        return [(left, left_rect.topleft), (right, right_rect.topleft)], []
 
     def _draw_speed_orb_glow(self, surface: pygame.Surface, draw_rect: pygame.Rect, opacity_scale: float = 1.0):
         """Draw a yellow shimmering aura around the player's collision silhouette."""
