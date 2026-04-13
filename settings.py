@@ -341,6 +341,7 @@ ORB_ICON_PATHS = {
 	"phase": str(ASSETS_DIR / "orbs" / "phase.png"),
 }
 SHIELD_EFFECT_PATH = ASSETS_DIR / "effects" / "shield.png"
+VOID_WALK_WING_PATH = ASSETS_DIR / "effects" / "void_walk_wing.png"
 
 # Opening scene audio
 BACKGROUND_MUSIC_TRACKS = [
