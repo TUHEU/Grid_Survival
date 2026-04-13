@@ -1,4 +1,6 @@
 import sys
+import os
+import shutil
 from pathlib import Path
 import pygame
 
@@ -97,7 +99,46 @@ DEFAULT_CONTROLS = {
     },
 }
 
-CUSTOM_CONTROLS_FILE = BASE_DIR / "custom_controls.json"
+def _resolve_controls_file() -> Path:
+    """Return the controls file path.
+
+    Source runs keep using the repo file.
+    Frozen one-file builds use a persistent user directory so controls survive restarts.
+    """
+    if getattr(sys, "frozen", False):
+        appdata = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA")
+        if appdata:
+            return Path(appdata) / "Grid_Survival" / "custom_controls.json"
+        return Path.home() / ".grid_survival" / "custom_controls.json"
+    return BASE_DIR / "custom_controls.json"
+
+
+CUSTOM_CONTROLS_FILE = _resolve_controls_file()
+_LEGACY_CUSTOM_CONTROLS_FILE = BASE_DIR / "custom_controls.json"
+
+
+def _migrate_legacy_controls_if_needed() -> None:
+    """Copy a legacy controls file into the persistent location once."""
+    if CUSTOM_CONTROLS_FILE.exists() or not getattr(sys, "frozen", False):
+        return
+
+    candidates = [
+        Path(sys.executable).resolve().parent / "custom_controls.json",
+        Path.cwd() / "custom_controls.json",
+        _LEGACY_CUSTOM_CONTROLS_FILE,
+    ]
+
+    for source in candidates:
+        try:
+            if not source.exists():
+                continue
+            if source.resolve() == CUSTOM_CONTROLS_FILE.resolve():
+                continue
+            CUSTOM_CONTROLS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, CUSTOM_CONTROLS_FILE)
+            return
+        except Exception:
+            continue
 
 _KEY_TO_NAME = {
     pygame.K_SPACE: "SPACE",
@@ -194,6 +235,8 @@ def _default_controls():
 def load_custom_controls():
     import json
 
+    _migrate_legacy_controls_if_needed()
+
     if not CUSTOM_CONTROLS_FILE.exists():
         return None
     try:
@@ -221,6 +264,7 @@ def save_custom_controls(controls):
     import json
 
     try:
+        CUSTOM_CONTROLS_FILE.parent.mkdir(parents=True, exist_ok=True)
         serializable = {}
         for player_key, player_controls in controls.items():
             serializable_controls = {}

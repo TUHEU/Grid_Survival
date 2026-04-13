@@ -177,34 +177,11 @@ def main():
                     return
                 break
 
-            selected_level = None
-            selected_target_score = 3
-            while True:
-                level_screen = LevelSelectionScreen(screen, clock, game_mode)
-                selected_level = level_screen.run()
-                if selected_level is None:
-                    if getattr(level_screen, "quit_requested", False):
-                        pygame.quit()
-                        return
-                    break
-
-                target_score_screen = TargetScoreSelectionScreen(screen, clock)
-                selected_target_score = target_score_screen.run()
-                if selected_target_score is None:
-                    if getattr(target_score_screen, "quit_requested", False):
-                        pygame.quit()
-                        return
-                    continue
-
-                selected_target_score = max(1, int(selected_target_score))
-                break
-
-            if selected_level is None:
-                continue
-
             network = None
             local_player_index = 0
             num_players = 2 if game_mode == MODE_LOCAL_MULTIPLAYER else 1
+            selected_level = None
+            selected_target_score = 3
 
             if game_mode == MODE_ONLINE_MULTIPLAYER:
                 choice = prompt_host_or_join(screen, clock)
@@ -234,6 +211,62 @@ def main():
                         toast_message(screen, clock, "Connection failed.")
                         continue
                     local_player_index = 1
+
+                if choice == "host":
+                    while True:
+                        level_screen = LevelSelectionScreen(screen, clock, game_mode)
+                        selected_level = level_screen.run()
+                        if selected_level is None:
+                            if getattr(level_screen, "quit_requested", False):
+                                pygame.quit()
+                                return
+                            if network:
+                                network.disconnect()
+                            break
+
+                        target_score_screen = TargetScoreSelectionScreen(screen, clock)
+                        selected_target_score = target_score_screen.run()
+                        if selected_target_score is None:
+                            if getattr(target_score_screen, "quit_requested", False):
+                                pygame.quit()
+                                return
+                            continue
+
+                        selected_target_score = max(1, int(selected_target_score))
+                        break
+
+                    if selected_level is None:
+                        continue
+                else:
+                    selected_level = resolve_level_option(1)
+                    if selected_level is None:
+                        toast_message(screen, clock, "No levels available.")
+                        if network:
+                            network.disconnect()
+                        continue
+            else:
+                while True:
+                    level_screen = LevelSelectionScreen(screen, clock, game_mode)
+                    selected_level = level_screen.run()
+                    if selected_level is None:
+                        if getattr(level_screen, "quit_requested", False):
+                            pygame.quit()
+                            return
+                        break
+
+                    target_score_screen = TargetScoreSelectionScreen(screen, clock)
+                    selected_target_score = target_score_screen.run()
+                    if selected_target_score is None:
+                        if getattr(target_score_screen, "quit_requested", False):
+                            pygame.quit()
+                            return
+                        continue
+
+                    selected_target_score = max(1, int(selected_target_score))
+                    break
+
+                if selected_level is None:
+                    continue
 
             while True:
                 char_select = PlayerSelectionScreen(
