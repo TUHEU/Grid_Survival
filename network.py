@@ -21,6 +21,9 @@ DISCOVERY_PORT = 5556
 DISCOVERY_MAGIC = "grid_survival_lan_v1"
 DISCOVERY_HOST_MAX_AGE = 4.0
 
+# Guard against corrupted or malicious length prefixes that would cause OOM
+MAX_MESSAGE_BYTES = 4 * 1024 * 1024  # 4 MB
+
 
 @dataclass
 class InputState:
@@ -77,34 +80,57 @@ class DiscoveredHost:
 class NetworkManager:
     """Base network manager for LAN multiplayer."""
 
+    # Message types that must never be dropped even when the send queue is full.
+    _CRITICAL_MESSAGES = frozenset({"disconnect", "game_start", "snapshot", "pause_state"})
+
     def __init__(self, *, is_host: bool):
         self.is_host = is_host
         self.socket: Optional[socket.socket] = None
         self.connected = False
         self.running = False
         self.receive_thread: Optional[threading.Thread] = None
+        # Bounded async send queue: prevents the main game loop from ever blocking
+        # on socket.sendall().  128 slots ≈ ~4 seconds of input messages at 30 Hz.
+        self._send_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=128)
+        self._send_thread: Optional[threading.Thread] = None
         self.message_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
-        self._send_lock = threading.Lock()
         self.peer_address: Optional[tuple[str, int]] = None
         self.last_error: Optional[str] = None
 
     def send_message(self, message_type: str, **payload: Any) -> bool:
-        """Send a framed JSON message to the connected peer."""
-        if not self.connected or not self.socket:
+        """Enqueue a framed JSON message for async delivery to the peer.
+
+        Returns True when the message was accepted into the send queue.
+        Non-critical messages (e.g. input_state) are silently dropped when the
+        queue is full; critical messages will block briefly before giving up.
+        """
+        if not self.connected:
             return False
 
         try:
             message = {"type": message_type, **payload}
             encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
             header = len(encoded).to_bytes(4, "big")
-            with self._send_lock:
-                self.socket.sendall(header)
-                self.socket.sendall(encoded)
-            return True
-        except (socket.error, BrokenPipeError, OSError) as exc:
+            data = header + encoded
+        except (TypeError, ValueError, OverflowError) as exc:
             self.last_error = str(exc)
-            self.connected = False
             return False
+
+        if message_type in self._CRITICAL_MESSAGES:
+            # Block for up to 100 ms to guarantee delivery of critical messages.
+            try:
+                self._send_queue.put(data, timeout=0.1)
+                return True
+            except queue.Full:
+                self.last_error = f"Send queue full, dropped critical: {message_type}"
+                return False
+        else:
+            # Non-critical: drop immediately if the queue is saturated.
+            try:
+                self._send_queue.put_nowait(data)
+                return True
+            except queue.Full:
+                return False
 
     def get_messages(self) -> list[dict[str, Any]]:
         """Return all queued messages received since the last call."""
@@ -118,8 +144,33 @@ class NetworkManager:
 
     def _start_receive_loop(self) -> None:
         self.running = True
-        self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
+        self.receive_thread = threading.Thread(
+            target=self._receive_loop, daemon=True, name="net-recv"
+        )
         self.receive_thread.start()
+        self._send_thread = threading.Thread(
+            target=self._send_loop, daemon=True, name="net-send"
+        )
+        self._send_thread.start()
+
+    def _send_loop(self) -> None:
+        """Dedicated send thread – drains the send queue without touching the game loop."""
+        while self.running and self.connected:
+            try:
+                data = self._send_queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+
+            # Take a local reference so the socket cannot be set to None mid-send.
+            sock = self.socket
+            if sock is None:
+                break
+            try:
+                sock.sendall(data)
+            except (socket.error, BrokenPipeError, OSError) as exc:
+                self.last_error = str(exc)
+                self.connected = False
+                break
 
     def _receive_loop(self) -> None:
         while self.running and self.connected and self.socket:
@@ -129,8 +180,10 @@ class NetworkManager:
                     break
 
                 length = int.from_bytes(length_bytes, "big")
-                if length <= 0:
-                    continue
+                # Guard: reject absurd or empty lengths to prevent OOM / crash.
+                if length <= 0 or length > MAX_MESSAGE_BYTES:
+                    self.last_error = f"Rejected message with invalid length: {length}"
+                    break
 
                 payload = self._recv_exact(length)
                 if not payload:
@@ -166,6 +219,12 @@ class NetworkManager:
     def disconnect(self) -> None:
         self.running = False
         self.connected = False
+        # Drain the send queue so the send thread can exit cleanly.
+        while not self._send_queue.empty():
+            try:
+                self._send_queue.get_nowait()
+            except queue.Empty:
+                break
         if self.socket:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
@@ -178,6 +237,8 @@ class NetworkManager:
             self.socket = None
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=1.0)
+        if self._send_thread and self._send_thread.is_alive():
+            self._send_thread.join(timeout=1.0)
 
 
 class NetworkHost(NetworkManager):
@@ -235,6 +296,9 @@ class NetworkHost(NetworkManager):
             self.last_error = str(exc)
             return False
 
+        # Disable Nagle's algorithm so small game packets (input/snapshot) are
+        # delivered immediately instead of being buffered by the OS.
+        client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client_socket.settimeout(0.25)
         self.socket = client_socket
         self.peer_address = addr
@@ -331,6 +395,8 @@ class NetworkClient(NetworkManager):
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(10.0)
             client.connect((host, port))
+            # Disable Nagle's algorithm for immediate delivery of small packets.
+            client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             client.settimeout(0.25)
             self.socket = client
             self.peer_address = (host, port)
