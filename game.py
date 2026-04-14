@@ -84,6 +84,11 @@ class GameManager:
         self._world_snapshot_interval = 1 / 6
         self._client_position_blend = 0.35
         self._client_snap_distance = 180.0
+        # Rate-limiting for client input messages: only send when the state
+        # changes or when the minimum interval has elapsed (30 Hz cap).
+        self._input_send_timer: float = 0.0
+        self._input_send_interval: float = 1 / 30
+        self._last_sent_input: dict | None = None
         self.level_map_path = Path(level_map_path) if level_map_path else None
         self.level_background_path = Path(level_background_path) if level_background_path else None
         self.target_score = max(1, int(target_score))
@@ -324,7 +329,15 @@ class GameManager:
                     self.remote_player_index: self._remote_input_state,
                 }
             else:
-                self.network.send_message("input_state", input=local_input)
+                # Rate-limit input messages to 30 Hz and skip identical states.
+                # Previously sent every frame (up to 60 Hz), flooding the host
+                # with redundant messages it mostly discarded.
+                self._input_send_timer += dt
+                input_changed = local_input != self._last_sent_input
+                if input_changed or self._input_send_timer >= self._input_send_interval:
+                    self.network.send_message("input_state", input=local_input)
+                    self._last_sent_input = dict(local_input)
+                    self._input_send_timer = 0.0
                 self._update_client_network_game(dt)
                 self._pending_power_press = False
                 return
@@ -512,6 +525,10 @@ class GameManager:
 
     def _update_client_network_game(self, dt: float):
         self.water.update(dt)
+        # Advance tile crumbling/warning animations locally so they are smooth
+        # between host snapshots.  Previously missing, making tiles appear frozen
+        # on the client side.
+        self.tile_manager.update(dt)
         self.orb_manager.advance_visuals(dt)
         if self.pacman_enemy_manager:
             self.pacman_enemy_manager.advance_visuals(dt)
@@ -1121,6 +1138,10 @@ class GameManager:
         self._pending_power_press = False
         self._remote_input_state = self._empty_network_input_state()
         self._authoritative_network_inputs = None
+        # Reset input rate-limiter so stale state from the previous round does
+        # not suppress the first input message of the new round.
+        self._last_sent_input = None
+        self._input_send_timer = 0.0
 
         self.tile_manager.reset()
         self.walkable_mask = self.original_walkable_mask.copy() if self.original_walkable_mask else None
