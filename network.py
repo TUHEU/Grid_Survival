@@ -315,7 +315,49 @@ class NetworkHost(NetworkManager):
             time.sleep(0.05)
         return False
 
+    def try_upnp_mapping(self) -> Optional[str]:
+        """Attempt an automatic UPnP/IGD port mapping for internet play.
+
+        Returns the router-reported external IP on success, or ``None`` when
+        UPnP is unavailable, the router rejected the request, or the optional
+        ``miniupnpc`` package is not installed.
+
+        Install with: ``pip install miniupnpc``
+        """
+        try:
+            import miniupnpc  # optional dependency
+        except ImportError:
+            return None
+
+        try:
+            upnp = miniupnpc.UPnP()
+            upnp.discoverdelay = 300
+            if upnp.discover() == 0:
+                return None
+            upnp.selectigd()
+            result = upnp.addportmapping(
+                self.port, "TCP", upnp.lanaddr, self.port, "Grid Survival", ""
+            )
+            if result:
+                self._upnp_handle = upnp
+                return upnp.externalipaddress()
+        except Exception:
+            pass
+        return None
+
+    def remove_upnp_mapping(self) -> None:
+        """Remove the UPnP mapping created by :meth:`try_upnp_mapping`."""
+        upnp = getattr(self, "_upnp_handle", None)
+        if upnp is None:
+            return
+        try:
+            upnp.deleteportmapping(self.port, "TCP")
+        except Exception:
+            pass
+        self._upnp_handle = None
+
     def disconnect(self) -> None:
+        self.remove_upnp_mapping()
         super().disconnect()
         self.listening = False
         self._stop_discovery_responder()
@@ -532,3 +574,30 @@ def get_local_ip() -> str:
                 sock.close()
             except OSError:
                 pass
+
+
+def get_public_ip(timeout: float = 5.0) -> Optional[str]:
+    """Return the machine's public IPv4 address by querying an external service.
+
+    Uses only the stdlib ``urllib`` package — no extra dependencies.
+    Returns ``None`` when offline or when every service times out.
+    Call this from a background thread so the UI stays responsive.
+    """
+    import urllib.request
+
+    _SERVICES = [
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://icanhazip.com",
+    ]
+    for url in _SERVICES:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                ip = resp.read().decode("utf-8", errors="ignore").strip()
+            # Basic sanity-check: four numeric octets.
+            parts = ip.split(".")
+            if len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+                return ip
+        except Exception:
+            continue
+    return None
