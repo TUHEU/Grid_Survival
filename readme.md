@@ -42,6 +42,7 @@ python -m venv .venv
 .venv\Scripts\activate  # PowerShell / Command Prompt
 pip install --upgrade pip
 pip install pygame pytmx
+pip install miniupnpc
 ```
 
 ### Run the game
