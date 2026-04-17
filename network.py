@@ -2,7 +2,10 @@
 LAN multiplayer networking for Grid Survival.
 
 The host runs the authoritative simulation. The client sends input updates and
-receives world snapshots back over a simple length-prefixed JSON protocol.
+receives world snapshots back over a hybrid transport:
+
+- TCP for reliable control/state messages.
+- UDP for high-frequency input and snapshot traffic.
 """
 
 from __future__ import annotations
@@ -17,12 +20,17 @@ from typing import Any, Optional
 
 
 DEFAULT_PORT = 5555
+GAME_UDP_PORT_OFFSET = 1
 DISCOVERY_PORT = 5556
 DISCOVERY_MAGIC = "grid_survival_lan_v1"
 DISCOVERY_HOST_MAX_AGE = 4.0
+UDP_HANDSHAKE_TYPE = "udp_hello"
+UDP_READY_TYPE = "udp_ready"
 
 # Guard against corrupted or malicious length prefixes that would cause OOM
 MAX_MESSAGE_BYTES = 4 * 1024 * 1024  # 4 MB
+# Keep UDP packets reasonably sized to avoid heavy fragmentation.
+MAX_UDP_MESSAGE_BYTES = 60 * 1024
 
 
 @dataclass
@@ -80,32 +88,57 @@ class DiscoveredHost:
 class NetworkManager:
     """Base network manager for LAN multiplayer."""
 
-    # Message types that must never be dropped even when the send queue is full.
-    _CRITICAL_MESSAGES = frozenset({"disconnect", "game_start", "snapshot", "pause_state"})
+    # Message types that must never be dropped even when the TCP send queue is full.
+    _CRITICAL_MESSAGES = frozenset(
+        {
+            "disconnect",
+            "game_start",
+            "pause_state",
+            "pause_toggle_request",
+            "restart_request",
+            "player_setup",
+        }
+    )
+    # High-frequency gameplay traffic prefers UDP, with automatic TCP fallback.
+    _UDP_PREFERRED_MESSAGES = frozenset({"input_state", "snapshot"})
 
     def __init__(self, *, is_host: bool):
         self.is_host = is_host
         self.socket: Optional[socket.socket] = None
+        self.udp_socket: Optional[socket.socket] = None
         self.connected = False
         self.running = False
         self.receive_thread: Optional[threading.Thread] = None
+        self.udp_receive_thread: Optional[threading.Thread] = None
         # Bounded async send queue: prevents the main game loop from ever blocking
         # on socket.sendall().  128 slots ≈ ~4 seconds of input messages at 30 Hz.
         self._send_queue: "queue.Queue[bytes]" = queue.Queue(maxsize=128)
         self._send_thread: Optional[threading.Thread] = None
         self.message_queue: "queue.Queue[dict[str, Any]]" = queue.Queue()
         self.peer_address: Optional[tuple[str, int]] = None
+        self.udp_peer_address: Optional[tuple[str, int]] = None
+        self.udp_connected = False
+        self._udp_send_seq = 0
+        self._udp_last_recv_seq: dict[str, int] = {}
+        self._last_udp_hello_time = 0.0
         self.last_error: Optional[str] = None
 
     def send_message(self, message_type: str, **payload: Any) -> bool:
         """Enqueue a framed JSON message for async delivery to the peer.
 
         Returns True when the message was accepted into the send queue.
-        Non-critical messages (e.g. input_state) are silently dropped when the
-        queue is full; critical messages will block briefly before giving up.
+        UDP-preferred messages are attempted first and transparently fall back
+        to TCP when UDP is unavailable.
         """
         if not self.connected:
             return False
+
+        if message_type in self._UDP_PREFERRED_MESSAGES:
+            # Client retries UDP hello until the host confirms the UDP path.
+            if not self.is_host and not self.udp_connected:
+                self._maybe_send_udp_hello()
+            if self._send_udp_message(message_type, **payload):
+                return True
 
         try:
             message = {"type": message_type, **payload}
@@ -132,6 +165,100 @@ class NetworkManager:
             except queue.Full:
                 return False
 
+    def _maybe_send_udp_hello(self) -> None:
+        if self.is_host:
+            return
+        if not self.connected or not self.udp_socket or not self.udp_peer_address:
+            return
+        now = time.time()
+        if now - self._last_udp_hello_time < 0.35:
+            return
+        self._last_udp_hello_time = now
+        self._send_udp_control(UDP_HANDSHAKE_TYPE, timestamp=now)
+
+    def _send_udp_control(
+        self,
+        message_type: str,
+        *,
+        address: tuple[str, int] | None = None,
+        **payload: Any,
+    ) -> bool:
+        if not self.udp_socket:
+            return False
+        destination = address or self.udp_peer_address
+        if not destination:
+            return False
+
+        try:
+            encoded = json.dumps(
+                {"type": message_type, **payload}, separators=(",", ":")
+            ).encode("utf-8")
+            if len(encoded) > MAX_UDP_MESSAGE_BYTES:
+                return False
+            self.udp_socket.sendto(encoded, destination)
+            return True
+        except (TypeError, ValueError, OverflowError, socket.error, OSError):
+            return False
+
+    def _next_udp_seq(self) -> int:
+        self._udp_send_seq = (self._udp_send_seq + 1) & 0xFFFFFFFF
+        return self._udp_send_seq
+
+    def _send_udp_message(self, message_type: str, **payload: Any) -> bool:
+        if (
+            not self.connected
+            or not self.udp_connected
+            or not self.udp_socket
+            or not self.udp_peer_address
+        ):
+            return False
+
+        try:
+            message = {"type": message_type, "_seq": self._next_udp_seq(), **payload}
+            encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+            if len(encoded) > MAX_UDP_MESSAGE_BYTES:
+                return False
+            self.udp_socket.sendto(encoded, self.udp_peer_address)
+            return True
+        except (TypeError, ValueError, OverflowError, socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            return False
+
+    def _can_accept_udp_peer(self, address: tuple[str, int]) -> bool:
+        if self.is_host and self.peer_address:
+            return address[0] == self.peer_address[0]
+        return True
+
+    def _accept_udp_payload_sender(self, address: tuple[str, int]) -> bool:
+        if self.udp_peer_address is None:
+            return self._can_accept_udp_peer(address)
+        return address == self.udp_peer_address
+
+    def _set_udp_peer(self, address: tuple[str, int]) -> None:
+        if not self._can_accept_udp_peer(address):
+            return
+        self.udp_peer_address = address
+        self.udp_connected = True
+
+    def _queue_message(self, message: dict[str, Any], *, via_udp: bool = False) -> None:
+        if not isinstance(message, dict):
+            return
+
+        if via_udp:
+            message_type = message.get("type")
+            sequence = message.get("_seq")
+            if isinstance(message_type, str) and isinstance(sequence, int):
+                last_seq = self._udp_last_recv_seq.get(message_type)
+                if last_seq is not None and sequence <= last_seq:
+                    return
+                self._udp_last_recv_seq[message_type] = sequence
+
+        cleaned = dict(message)
+        cleaned.pop("_seq", None)
+        if not isinstance(cleaned.get("type"), str):
+            return
+        self.message_queue.put(cleaned)
+
     def get_messages(self) -> list[dict[str, Any]]:
         """Return all queued messages received since the last call."""
         messages: list[dict[str, Any]] = []
@@ -152,6 +279,14 @@ class NetworkManager:
             target=self._send_loop, daemon=True, name="net-send"
         )
         self._send_thread.start()
+
+    def _start_udp_receive_loop(self) -> None:
+        if not self.udp_socket:
+            return
+        self.udp_receive_thread = threading.Thread(
+            target=self._udp_receive_loop, daemon=True, name="net-udp-recv"
+        )
+        self.udp_receive_thread.start()
 
     def _send_loop(self) -> None:
         """Dedicated send thread – drains the send queue without touching the game loop."""
@@ -191,13 +326,53 @@ class NetworkManager:
 
                 message = json.loads(payload.decode("utf-8"))
                 if isinstance(message, dict):
-                    self.message_queue.put(message)
+                    self._queue_message(message, via_udp=False)
             except (socket.error, OSError, json.JSONDecodeError) as exc:
                 self.last_error = str(exc)
                 break
 
         self.connected = False
         self.running = False
+
+    def _udp_receive_loop(self) -> None:
+        while self.running and self.connected and self.udp_socket:
+            try:
+                payload, address = self.udp_socket.recvfrom(MAX_UDP_MESSAGE_BYTES + 1024)
+            except socket.timeout:
+                continue
+            except (socket.error, OSError):
+                break
+
+            if len(payload) > MAX_UDP_MESSAGE_BYTES:
+                continue
+
+            try:
+                message = json.loads(payload.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+
+            if not isinstance(message, dict):
+                continue
+
+            message_type = message.get("type")
+            if message_type == UDP_HANDSHAKE_TYPE:
+                if self.is_host and self._can_accept_udp_peer(address):
+                    self._set_udp_peer(address)
+                    self._send_udp_control(UDP_READY_TYPE, address=address)
+                continue
+            if message_type == UDP_READY_TYPE:
+                if not self.is_host and self._can_accept_udp_peer(address):
+                    self._set_udp_peer(address)
+                continue
+
+            if not self._accept_udp_payload_sender(address):
+                continue
+            if self.udp_peer_address is None:
+                self._set_udp_peer(address)
+
+            self._queue_message(message, via_udp=True)
+
+        self.udp_connected = False
 
     def _recv_exact(self, size: int) -> Optional[bytes]:
         if not self.socket:
@@ -219,12 +394,20 @@ class NetworkManager:
     def disconnect(self) -> None:
         self.running = False
         self.connected = False
+        self.udp_connected = False
+        self.udp_peer_address = None
         # Drain the send queue so the send thread can exit cleanly.
         while not self._send_queue.empty():
             try:
                 self._send_queue.get_nowait()
             except queue.Empty:
                 break
+        if self.udp_socket:
+            try:
+                self.udp_socket.close()
+            except OSError:
+                pass
+            self.udp_socket = None
         if self.socket:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
@@ -237,8 +420,11 @@ class NetworkManager:
             self.socket = None
         if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join(timeout=1.0)
+        if self.udp_receive_thread and self.udp_receive_thread.is_alive():
+            self.udp_receive_thread.join(timeout=1.0)
         if self._send_thread and self._send_thread.is_alive():
             self._send_thread.join(timeout=1.0)
+        self._udp_last_recv_seq.clear()
 
 
 class NetworkHost(NetworkManager):
@@ -265,6 +451,9 @@ class NetworkHost(NetworkManager):
             self.server_socket.bind(("0.0.0.0", self.port))
             self.server_socket.listen(1)
             self.server_socket.setblocking(False)
+            # UDP is an optimization path; hosting should still work with TCP
+            # even if this socket cannot be created.
+            self._start_game_udp_socket()
             self._start_discovery_responder()
             self.listening = True
             self.last_error = None
@@ -278,6 +467,12 @@ class NetworkHost(NetworkManager):
                 except OSError:
                     pass
                 self.server_socket = None
+            if self.udp_socket:
+                try:
+                    self.udp_socket.close()
+                except OSError:
+                    pass
+                self.udp_socket = None
             self._stop_discovery_responder()
             return False
 
@@ -305,7 +500,28 @@ class NetworkHost(NetworkManager):
         self.connected = True
         self.last_error = None
         self._start_receive_loop()
+        self._start_udp_receive_loop()
         return True
+
+    def _start_game_udp_socket(self) -> bool:
+        try:
+            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_socket.bind(("0.0.0.0", self.port + GAME_UDP_PORT_OFFSET))
+            udp_socket.settimeout(0.25)
+            self.udp_socket = udp_socket
+            self.udp_peer_address = None
+            self.udp_connected = False
+            return True
+        except (socket.error, OSError) as exc:
+            self.last_error = str(exc)
+            if self.udp_socket:
+                try:
+                    self.udp_socket.close()
+                except OSError:
+                    pass
+                self.udp_socket = None
+            return False
 
     def wait_for_connection(self, timeout: float = 30.0) -> bool:
         deadline = time.time() + timeout
@@ -444,17 +660,51 @@ class NetworkClient(NetworkManager):
             self.peer_address = (host, port)
             self.connected = True
             self.last_error = None
+
+            # UDP lane for high-frequency gameplay packets.
+            self._start_client_udp_channel(host, port)
+
             self._start_receive_loop()
+            self._start_udp_receive_loop()
+            self._maybe_send_udp_hello()
             return True
         except (socket.error, OSError) as exc:
             self.last_error = str(exc)
             self.connected = False
+            if self.udp_socket:
+                try:
+                    self.udp_socket.close()
+                except OSError:
+                    pass
+                self.udp_socket = None
             if self.socket:
                 try:
                     self.socket.close()
                 except OSError:
                     pass
                 self.socket = None
+            return False
+
+    def _start_client_udp_channel(self, host: str, port: int) -> bool:
+        try:
+            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            udp_socket.bind(("0.0.0.0", 0))
+            udp_socket.settimeout(0.25)
+            self.udp_socket = udp_socket
+            self.udp_peer_address = (host, port + GAME_UDP_PORT_OFFSET)
+            self.udp_connected = False
+            self._udp_last_recv_seq.clear()
+            return True
+        except (socket.error, OSError):
+            if self.udp_socket:
+                try:
+                    self.udp_socket.close()
+                except OSError:
+                    pass
+                self.udp_socket = None
+            self.udp_peer_address = None
+            self.udp_connected = False
             return False
 
 
