@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 ENV/
+output/
 custom_controls.json
 # Python cache
 __pycache__/
