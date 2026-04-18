@@ -3,11 +3,13 @@ from pathlib import Path
 
 import pygame
 
+from backend.account_service import AccountService
 from ai_player import AIPlayer
 from assets import load_background_surface, load_tilemap_surface
 from audio import get_audio
 from collision_manager import CollisionManager
 from player import Player
+from post_match_ui import MatchSummaryScreen, RRGainScreen
 from orbs import OrbManager
 from pacman_enemies import PacmanEnemyManager
 from powers import (
@@ -57,6 +59,9 @@ class GameManager:
         level_map_path: str | Path | None = None,
         level_background_path: str | Path | None = None,
         target_score: int = 3,
+        account_service: AccountService | None = None,
+        account_username: str | None = None,
+        network_player_names: list[str] | None = None,
     ):
         if screen is None or clock is None:
             pygame.init()
@@ -68,6 +73,17 @@ class GameManager:
         self.game_mode = game_mode
         self.paused = False
         self.selected_characters = selected_characters or []
+        self.account_service = account_service
+        self.account_username = (account_username or "").strip() or None
+        self.network_player_names = [str(name) for name in (network_player_names or [])]
+        self._guest_rr = 1000
+        self._account_sync_timer = 0.0
+        self._account_sync_interval = 20.0
+        if self.account_service and self.account_username:
+            profile = self.account_service.get_profile(self.account_username)
+            if profile is not None:
+                self._guest_rr = int(profile.rr)
+        self._match_rr_start = int(self._guest_rr)
         self.network = network
         self.is_network_game = (
             self.game_mode == MODE_ONLINE_MULTIPLAYER and self.network is not None
@@ -98,6 +114,9 @@ class GameManager:
         self._round_restart_delay = 2.0
         self._round_restart_timer = 0.0
         self._match_complete = False
+        self._round_transition_seen = False
+        self._match_player_labels: list[str] = []
+        self._match_player_stats: list[dict] = []
         
         # Load assets
         self.background_surface = load_background_surface(
@@ -227,6 +246,8 @@ class GameManager:
             self.pacman_enemy_manager = PacmanEnemyManager(enemy_spawns)
 
         self.round_wins = [0 for _ in self.players]
+        self._match_player_labels = [self._resolve_player_label(idx) for idx in range(len(self.players))]
+        self._match_player_stats = [self._new_match_stat_row(idx) for idx in range(len(self.players))]
         self.hud.set_player_info(player_name, len(self.players), len(self.players))
         self.hud.set_round_scoreboard(self.round_wins, self.target_score)
 
@@ -291,6 +312,12 @@ class GameManager:
 
     def update(self, dt: float, keys):
         self.audio.update()
+
+        if self.account_service and self.account_username:
+            self._account_sync_timer += dt
+            if self._account_sync_timer >= self._account_sync_interval:
+                self._account_sync_timer = 0.0
+                self.account_service.sync_pending(self.account_username)
 
         if getattr(self, "paused", False):
             if self.is_network_game and self.network and self.network.connected:
@@ -485,8 +512,17 @@ class GameManager:
 
         self.orb_manager.update(dt, self.walkable_bounds, self.players, self)
 
+        for idx, player in enumerate(self.players):
+            if idx >= len(self._match_player_stats):
+                continue
+            if player in self.eliminated_players:
+                continue
+            self._match_player_stats[idx]["survival_time"] += float(dt)
+
         # Update player count in HUD
         alive_count = len(self.players) - len(self.eliminated_players)
+        if alive_count > 1:
+            self._round_transition_seen = False
         self.hud.set_player_info(self.player_name, alive_count, len(self.players))
 
         # Check completion only after elimination animations finish so death sequences play out.
@@ -495,6 +531,9 @@ class GameManager:
         # Victory for the last remaining participant.
         if len(self.players) > 1 and alive_count == 1:
             if completion_ready:
+                if self._round_transition_seen:
+                    return
+                self._round_transition_seen = True
                 winner_index = next(
                     (idx for idx, player in enumerate(self.players) if player not in self.eliminated_players),
                     0,
@@ -504,8 +543,14 @@ class GameManager:
                 self._handle_round_victory(winner_index, winner_label)
             return
 
-        # Elimination when everyone is gone.
+        # Round draw when everyone is gone in multi-player.
         if alive_count == 0 and completion_ready:
+            if len(self.players) > 1:
+                if self._round_transition_seen:
+                    return
+                self._round_transition_seen = True
+                self._handle_round_draw()
+                return
             self._trigger_game_over()
 
         for player in self.players:
@@ -1030,6 +1075,13 @@ class GameManager:
             self.eliminated_players.append(player)
             player._eliminated = True
             print(f"Player eliminated: {reason}")
+            try:
+                eliminated_index = self.players.index(player)
+            except ValueError:
+                eliminated_index = -1
+            if 0 <= eliminated_index < len(self._match_player_stats):
+                self._match_player_stats[eliminated_index]["deaths"] += 1
+                self._match_player_stats[eliminated_index]["damage_taken"] += 100
             # Trigger death state if available
             if hasattr(player, 'die'):
                 player.die()
@@ -1141,7 +1193,7 @@ class GameManager:
                 self.network.send_message("snapshot", state=self._build_network_snapshot())
 
     def _handle_round_victory(self, winner_index: int, winner_label: str):
-        """Count the round winner and decide whether the match is complete."""
+        """Count round results and show RR/summary only at full match completion."""
         if not self.players:
             return
 
@@ -1150,12 +1202,311 @@ class GameManager:
             self.round_wins = [0 for _ in self.players]
 
         self.round_wins[winner_index] += 1
+        self._register_round_stats(winner_index, is_draw=False)
         self.hud.set_round_scoreboard(self.round_wins, self.target_score)
         self._round_restart_timer = 0.0
         self._match_complete = self.round_wins[winner_index] >= self.target_score
 
-        result_suffix = "WINS MATCH" if self._match_complete else "WINS ROUND"
-        self._trigger_victory(f"P{winner_index + 1} - {winner_label} {result_suffix}", winner_label)
+        if not self._match_complete:
+            if self.is_network_game:
+                if self.is_network_host:
+                    self._restart_network_round(reset_match=False)
+            else:
+                self._restart_game(reset_match=False)
+            return
+
+        action = self._run_round_transition(winner_index, winner_label, is_draw=False)
+        if action == "quit":
+            self.running = False
+            return
+        if action == "menu":
+            if self.is_network_game and self.network and self.network.connected:
+                self.network.send_message("disconnect")
+            self.return_to_main_menu = True
+            self.running = False
+            return
+
+        self.return_to_main_menu = True
+        self.running = False
+
+    def _handle_round_draw(self) -> None:
+        """Handle a round where all players are eliminated with no winner."""
+        if not self.players:
+            return
+
+        self._register_round_stats(None, is_draw=True)
+        self.hud.set_round_scoreboard(self.round_wins, self.target_score)
+        self._round_restart_timer = 0.0
+        self._match_complete = False
+
+        if self.is_network_game:
+            if self.is_network_host:
+                self._restart_network_round(reset_match=False)
+        else:
+            self._restart_game(reset_match=False)
+
+    def _resolve_player_label(self, index: int) -> str:
+        if 0 <= index < len(self.network_player_names):
+            label = self.network_player_names[index].strip()
+            if label:
+                return label
+
+        if self.account_username and index == (self.local_player_index if self.is_network_game else 0):
+            return self.account_username
+
+        player = self.players[index] if 0 <= index < len(self.players) else None
+        if player is not None and getattr(player, "is_ai", False):
+            return f"AI {index + 1}"
+
+        return f"Player {index + 1}"
+
+    def _new_match_stat_row(self, index: int) -> dict:
+        player = self.players[index] if 0 <= index < len(self.players) else None
+        return {
+            "username": self._resolve_player_label(index),
+            "character": str(getattr(player, "character_name", f"Player {index + 1}")),
+            "rounds_played": 0,
+            "rounds_won": 0,
+            "eliminations": 0,
+            "deaths": 0,
+            "damage_dealt": 0,
+            "damage_taken": 0,
+            "survival_time": 0.0,
+        }
+
+    def _register_round_stats(self, winner_index: int | None, is_draw: bool = False) -> None:
+        for idx, row in enumerate(self._match_player_stats):
+            row["character"] = str(getattr(self.players[idx], "character_name", row.get("character", "")))
+            row["rounds_played"] += 1
+
+            if not is_draw and winner_index is not None and idx == winner_index:
+                row["rounds_won"] += 1
+                row["eliminations"] += max(0, len(self.players) - 1)
+                row["damage_dealt"] += 180
+            elif is_draw:
+                row["damage_dealt"] += 60
+            else:
+                # Non-winners still tend to deal some incidental damage during the round.
+                row["damage_dealt"] += 40
+
+            if self.players[idx] in self.eliminated_players:
+                row["damage_taken"] += 30
+
+    def _compute_mvp_index(self) -> int:
+        if not self._match_player_stats:
+            return 0
+
+        best_index = 0
+        best_score = -10**9
+        for idx, row in enumerate(self._match_player_stats):
+            score = (
+                int(row.get("rounds_won", 0)) * 120
+                + int(row.get("eliminations", 0)) * 36
+                + int(row.get("damage_dealt", 0)) * 0.12
+                + float(row.get("survival_time", 0.0)) * 0.45
+                - int(row.get("deaths", 0)) * 28
+            )
+            if score > best_score:
+                best_score = score
+                best_index = idx
+        return best_index
+
+    def _local_account_index(self) -> int | None:
+        if self.is_network_game:
+            if 0 <= self.local_player_index < len(self.players):
+                return self.local_player_index
+            return None
+        if self.players:
+            return 0
+        return None
+
+    def _is_ranked_mode(self) -> bool:
+        # LAN/online matches are ranked, campaign/local multiplayer are unranked.
+        return self.game_mode == MODE_ONLINE_MULTIPLAYER
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    def _share(self, value: float, total: float, neutral: float = 0.5) -> float:
+        if total <= 0:
+            return float(neutral)
+        return self._clamp01(float(value) / float(total))
+
+    def _match_performance_score(
+        self,
+        local_index: int,
+        winner_index: int | None,
+        mvp_index: int,
+        is_draw: bool = False,
+    ) -> float:
+        if local_index < 0 or local_index >= len(self._match_player_stats):
+            return 0.5
+
+        row = self._match_player_stats[local_index]
+        total_rounds_won = sum(max(0, int(r.get("rounds_won", 0))) for r in self._match_player_stats)
+        total_eliminations = sum(max(0, int(r.get("eliminations", 0))) for r in self._match_player_stats)
+        total_damage_dealt = sum(max(0, int(r.get("damage_dealt", 0))) for r in self._match_player_stats)
+        total_damage_taken = sum(max(0, int(r.get("damage_taken", 0))) for r in self._match_player_stats)
+        total_survival = sum(max(0.0, float(r.get("survival_time", 0.0))) for r in self._match_player_stats)
+        total_deaths = sum(max(0, int(r.get("deaths", 0))) for r in self._match_player_stats)
+
+        rounds_share = self._share(max(0, int(row.get("rounds_won", 0))), total_rounds_won)
+        elimination_share = self._share(max(0, int(row.get("eliminations", 0))), total_eliminations)
+        dealt_share = self._share(max(0, int(row.get("damage_dealt", 0))), total_damage_dealt)
+        taken_efficiency = 1.0 - self._share(max(0, int(row.get("damage_taken", 0))), total_damage_taken)
+        survival_share = self._share(max(0.0, float(row.get("survival_time", 0.0))), total_survival)
+        death_efficiency = 1.0 - self._share(max(0, int(row.get("deaths", 0))), total_deaths)
+
+        base_score = (
+            0.24 * rounds_share
+            + 0.17 * elimination_share
+            + 0.17 * dealt_share
+            + 0.14 * taken_efficiency
+            + 0.14 * survival_share
+            + 0.14 * death_efficiency
+        )
+        win_bonus = 0.12 if (winner_index is not None and local_index == winner_index) else 0.0
+        mvp_bonus = 0.08 if local_index == mvp_index else 0.0
+        draw_bonus = 0.03 if is_draw else 0.0
+        return self._clamp01(base_score + win_bonus + mvp_bonus + draw_bonus)
+
+    def _compute_rr_delta(
+        self,
+        local_index: int,
+        winner_index: int | None,
+        mvp_index: int,
+        is_draw: bool = False,
+        ranked_mode: bool = True,
+    ) -> int:
+        if not ranked_mode:
+            return 0
+        if is_draw:
+            return 0
+
+        score = self._match_performance_score(local_index, winner_index, mvp_index, is_draw=is_draw)
+        won_match = winner_index is not None and local_index == winner_index
+        if won_match:
+            gain = int(round(score * 45.0))
+            return max(0, min(45, gain))
+
+        loss = int(round((1.0 - score) * 30.0))
+        return -max(0, min(30, loss))
+
+    def _apply_local_account_round_result(
+        self,
+        winner_index: int | None,
+        mvp_index: int,
+        is_draw: bool = False,
+    ) -> tuple[str, int, int, int]:
+        local_index = self._local_account_index()
+        local_label = self.account_username or self.player_name
+        rr_before = int(self._guest_rr)
+        rr_after = rr_before
+        rr_delta = 0
+
+        if local_index is None:
+            return local_label, rr_before, rr_after, rr_delta
+
+        ranked_mode = self._is_ranked_mode()
+        rr_delta = self._compute_rr_delta(
+            local_index,
+            winner_index,
+            mvp_index,
+            is_draw=is_draw,
+            ranked_mode=ranked_mode,
+        )
+
+        local_row = self._match_player_stats[local_index] if local_index < len(self._match_player_stats) else {}
+        damage_dealt_delta = int(max(0, local_row.get("damage_dealt", 0)))
+        damage_taken_delta = int(max(0, local_row.get("damage_taken", 0)))
+        eliminations_delta = int(max(0, local_row.get("eliminations", 0)))
+        deaths_delta = int(max(0, local_row.get("deaths", 0)))
+        rounds_played_delta = int(max(0, local_row.get("rounds_played", 0)))
+        rounds_won_delta = int(max(0, local_row.get("rounds_won", 0)))
+
+        did_win_match = bool(self._match_complete and not is_draw and winner_index is not None and local_index == winner_index)
+        matches_played_delta = 1 if self._match_complete else 0
+        matches_won_delta = 1 if did_win_match else 0
+        mvp_delta = 1 if self._match_complete and local_index == mvp_index else 0
+
+        if self.account_service and self.account_username:
+            profile_before = self.account_service.get_profile(self.account_username)
+            if profile_before is not None:
+                rr_before = int(profile_before.rr)
+
+            updated = self.account_service.apply_stat_delta(
+                self.account_username,
+                rr_delta=rr_delta,
+                damage_dealt=damage_dealt_delta,
+                damage_taken=damage_taken_delta,
+                eliminations=eliminations_delta,
+                deaths=deaths_delta,
+                rounds_played=rounds_played_delta,
+                rounds_won=rounds_won_delta,
+                matches_played=matches_played_delta,
+                matches_won=matches_won_delta,
+                mvp_count=mvp_delta,
+                ranked=ranked_mode,
+            )
+            if updated is not None:
+                rr_after = int(updated.rr)
+                self._guest_rr = rr_after
+            else:
+                rr_after = max(0, rr_before + rr_delta) if ranked_mode else rr_before
+                self._guest_rr = rr_after
+        else:
+            rr_before = int(self._guest_rr)
+            rr_after = max(0, rr_before + rr_delta) if ranked_mode else rr_before
+            self._guest_rr = rr_after
+
+        return local_label, rr_before, rr_after, rr_delta
+
+    def _build_summary_rows(self) -> list[dict]:
+        rows: list[dict] = []
+        for idx, row in enumerate(self._match_player_stats):
+            rows.append(
+                {
+                    "username": str(row.get("username", self._resolve_player_label(idx))),
+                    "character": str(row.get("character", getattr(self.players[idx], "character_name", "Caveman"))),
+                    "rounds_won": int(row.get("rounds_won", 0)),
+                    "eliminations": int(row.get("eliminations", 0)),
+                    "deaths": int(row.get("deaths", 0)),
+                    "damage_dealt": int(row.get("damage_dealt", 0)),
+                    "damage_taken": int(row.get("damage_taken", 0)),
+                }
+            )
+        return rows
+
+    def _run_round_transition(self, winner_index: int | None, winner_label: str, is_draw: bool = False) -> str:
+        mvp_index = self._compute_mvp_index()
+        mvp_name = self._match_player_stats[mvp_index]["username"] if self._match_player_stats else winner_label
+
+        rr_user, _rr_before, rr_after, _rr_delta = self._apply_local_account_round_result(
+            winner_index,
+            mvp_index,
+            is_draw=is_draw,
+        )
+        ranked_mode = self._is_ranked_mode()
+        if ranked_mode:
+            rr_start = int(self._match_rr_start)
+            rr_screen = RRGainScreen(rr_user, rr_start, rr_after, "RANKED MATCH COMPLETE")
+            rr_action = rr_screen.run(self.screen, self.clock)
+            if rr_action in {"quit", "menu"}:
+                return rr_action
+
+        summary_prefix = "Ranked" if ranked_mode else "Unranked"
+        if is_draw:
+            summary_title = f"{summary_prefix} Match Draw"
+        else:
+            summary_title = f"{summary_prefix} Match Winner: {winner_label}"
+        summary_screen = MatchSummaryScreen(
+            self._build_summary_rows(),
+            mvp_name,
+            summary_title,
+            allow_continue=False,
+        )
+        return summary_screen.run(self.screen, self.clock)
 
     def _restart_game(self, reset_match: bool = False):
         """Restart the game."""
@@ -1165,15 +1516,25 @@ class GameManager:
         self.victory_screen = None
         self.game_over_state = None
         self._match_complete = False
+        self._round_transition_seen = False
         self._round_restart_timer = 0.0
         if reset_match or len(self.round_wins) != len(self.players):
             self.round_wins = [0 for _ in self.players]
+        if reset_match or len(self._match_player_stats) != len(self.players):
+            self._match_player_labels = [self._resolve_player_label(idx) for idx in range(len(self.players))]
+            self._match_player_stats = [self._new_match_stat_row(idx) for idx in range(len(self.players))]
         self.eliminated_players.clear()
         self._pending_power_press = False
         self._remote_input_state = self._empty_network_input_state()
         self._authoritative_network_inputs = None
         self._last_client_snapshot_time = -1.0
         self._last_client_world_snapshot_time = -1.0
+        if self.account_service and self.account_username:
+            profile = self.account_service.get_profile(self.account_username)
+            if profile is not None:
+                self._guest_rr = int(profile.rr)
+        if reset_match:
+            self._match_rr_start = int(self._guest_rr)
         # Reset input rate-limiter so stale state from the previous round does
         # not suppress the first input message of the new round.
         self._last_sent_input = None

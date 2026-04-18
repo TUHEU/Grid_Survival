@@ -3,6 +3,7 @@ import sys
 
 import pygame
 
+from backend.account_service import AccountService
 from audio import get_audio
 from game import GameManager
 from host_waiting_screen import host_waiting_screen
@@ -15,17 +16,18 @@ from lan_prompts import (
 )
 from network import NetworkClient, NetworkHost, get_local_ip, get_public_ip
 from scenes import (
+    AccountPortalScreen,
     LevelSelectionScreen,
     ModeSelectionScreen,
     PlayerSelectionScreen,
     TargetScoreSelectionScreen,
-    TitleScreen,
 )
 from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
 from scenes.level_selection import resolve_level_option
 from settings import (
     FONT_PATH_BODY,
     FONT_PATH_HEADING,
+    MUSIC_PATH,
     MODE_LOCAL_MULTIPLAYER,
     MODE_ONLINE_MULTIPLAYER,
     WINDOW_FLAGS,
@@ -166,12 +168,31 @@ def main():
     screen = pygame.display.set_mode(WINDOW_SIZE, WINDOW_FLAGS)
     pygame.display.set_caption(WINDOW_TITLE)
     clock = pygame.time.Clock()
+    account_service = AccountService()
+    active_account_username = account_service.get_recent_account_username()
 
     while True:
-        title_screen = TitleScreen(screen, clock)
-        player_name = title_screen.run()
-        if player_name is None:
-            break
+        get_audio().play_music(track=MUSIC_PATH, loop=True, fade_ms=900)
+
+        account_portal = AccountPortalScreen(
+            screen,
+            clock,
+            account_service,
+            suggested_username=active_account_username or "Player",
+            current_username=active_account_username,
+        )
+        account_result = account_portal.run()
+        if account_result.get("action") == "quit":
+            pygame.quit()
+            return
+        if account_result.get("action") == "back":
+            pygame.quit()
+            return
+        if account_result.get("action") != "continue":
+            continue
+
+        player_name = str(account_result.get("player_name") or active_account_username or "Player")
+        active_account_username = account_result.get("account_username") or None
 
         while True:
             break_to_title = False
@@ -188,6 +209,7 @@ def main():
             num_players = 2 if game_mode == MODE_LOCAL_MULTIPLAYER else 1
             selected_level = None
             selected_target_score = 3
+            network_player_names = None
 
             if game_mode == MODE_ONLINE_MULTIPLAYER:
                 choice = prompt_host_or_join(screen, clock)
@@ -359,6 +381,10 @@ def main():
                         str(player.get("character", selected_characters[0]))
                         for player in match_setup["players"]
                     ]
+                    network_player_names = [
+                        str(player.get("name", f"Player {idx + 1}"))
+                        for idx, player in enumerate(match_setup["players"])
+                    ]
                     local_player_index = int(match_setup["local_player_index"])
                     selected_level = resolve_level_option(
                         int(match_setup.get("level_id", selected_level.level_id))
@@ -381,6 +407,9 @@ def main():
                     level_map_path=selected_level.map_path,
                     level_background_path=selected_level.background_path,
                     target_score=selected_target_score,
+                    account_service=account_service,
+                    account_username=active_account_username,
+                    network_player_names=network_player_names,
                 ).run()
                 
                 if result == "main_menu":
