@@ -7,6 +7,7 @@ import pygame
 
 from animation import SpriteAnimation, load_frames_from_directory
 from character_manager import build_animation_paths
+from scenes.common import draw_online_status_badge, update_online_status
 from settings import (
     FONT_PATH_BODY,
     FONT_PATH_HEADING,
@@ -62,6 +63,7 @@ class RRGainScreen:
     def run(self, screen: pygame.Surface, clock: pygame.time.Clock) -> str:
         while True:
             dt = clock.tick(TARGET_FPS) / 1000.0
+            update_online_status(dt)
             self._update(dt)
 
             for event in pygame.event.get():
@@ -120,6 +122,11 @@ class RRGainScreen:
 
         hint = self._font_small.render("Press ENTER to skip", True, (170, 185, 210))
         screen.blit(hint, hint.get_rect(center=(panel.centerx, panel.bottom - 36)))
+        draw_online_status_badge(
+            screen,
+            reserved_rects=(panel,),
+            preferred_corners=("top-right", "bottom-right", "top-left", "bottom-left"),
+        )
 
 
 class MatchSummaryScreen:
@@ -153,6 +160,7 @@ class MatchSummaryScreen:
     def run(self, screen: pygame.Surface, clock: pygame.time.Clock) -> str:
         while True:
             dt = clock.tick(TARGET_FPS) / 1000.0
+            update_online_status(dt)
             for anim in self._anims:
                 if anim is not None:
                     anim.update(dt)
@@ -294,6 +302,12 @@ class MatchSummaryScreen:
         else:
             hint = self._font_small.render("Match complete. Return to menu.", True, (180, 195, 222))
             screen.blit(hint, hint.get_rect(center=(panel.centerx - 132, panel.bottom - 52)))
+
+        draw_online_status_badge(
+            screen,
+            reserved_rects=(panel,),
+            preferred_corners=("top-right", "bottom-right", "top-left", "bottom-left"),
+        )
 
     def _draw_button(
         self,

@@ -22,7 +22,7 @@ from scenes import (
     PlayerSelectionScreen,
     TargetScoreSelectionScreen,
 )
-from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font
+from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font, set_online_status_service
 from scenes.level_selection import resolve_level_option
 from settings import (
     FONT_PATH_BODY,
@@ -315,6 +315,7 @@ def main():
     pygame.display.set_caption(WINDOW_TITLE)
     clock = pygame.time.Clock()
     account_service = AccountService()
+    set_online_status_service(account_service)
     active_account_username = account_service.get_recent_account_username()
 
     while True:

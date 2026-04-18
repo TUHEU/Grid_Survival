@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pygame
 
 from backend.account_service import AccountProfile, AccountService
@@ -71,7 +73,7 @@ class AccountPortalScreen:
         self._font_lb_detail_label = _load_font(FONT_PATH_BODY, max(18, FONT_SIZE_BODY - 1), bold=True)
         self._font_lb_detail_value = _load_font(FONT_PATH_BODY, max(21, FONT_SIZE_BODY + 1))
         self._font_lb_detail_icon = _load_font(FONT_PATH_SMALL, max(14, FONT_SIZE_SMALL), bold=True)
-        self._audio_overlay = SceneAudioOverlay()
+        self._audio_overlay = SceneAudioOverlay(show_online_status=False)
         self._title_shell = TitleScreen(
             screen,
             clock,
@@ -83,18 +85,40 @@ class AccountPortalScreen:
         self._button_rects: dict[str, pygame.Rect] = {}
         self._tutorial_button_rect = pygame.Rect(24, self.height - 124, 190, 46)
         self._controls_button_rect = pygame.Rect(self.width - 134, self.height - 68, 110, 46)
+        self._auth_username_rect = pygame.Rect(0, 0, 0, 0)
+        self._auth_password_rect = pygame.Rect(0, 0, 0, 0)
+        self._auth_popup_visible = False
+        self._auth_popup_title = ""
+        self._auth_popup_lines: list[str] = []
+        self._auth_popup_action = "info"
+        self._auth_popup_primary_label = "OK"
+        self._auth_popup_secondary_label: str | None = None
+        self._auth_popup_primary_rect = pygame.Rect(0, 0, 0, 0)
+        self._auth_popup_secondary_rect = pygame.Rect(0, 0, 0, 0)
+
+        self._remote_online: bool | None = None
+        self._remote_check_interval = 4.0
+        self._remote_check_timer = self._remote_check_interval
+        self._remote_check_running = False
+        self._remote_check_result: bool | None = None
+        self._request_remote_status_check(force=True)
 
     def run(self) -> dict[str, str | None]:
         self._fade("in")
         while True:
             dt = self.clock.tick(TARGET_FPS) / 1000.0
             self._update_title_shell(dt)
+            self._update_remote_status(dt)
 
             for event in pygame.event.get():
                 if self._audio_overlay.handle_event(event):
                     continue
                 if event.type == pygame.QUIT:
                     return {"action": "quit", "player_name": None, "account_username": None}
+
+                if self._auth_popup_visible and self._state in {"login", "register"}:
+                    self._handle_auth_popup_event(event)
+                    continue
 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self._tutorial_button_rect.collidepoint(event.pos):
@@ -182,7 +206,251 @@ class AccountPortalScreen:
         self._title_shell._draw_controls_panel()
         self._draw_controls_edit_button()
         self._draw_tutorial_button()
+        self._draw_remote_status_badge()
         self._audio_overlay.draw(self.screen)
+        self._draw_auth_popup()
+
+    def _request_remote_status_check(self, force: bool = False) -> None:
+        if self._remote_check_running:
+            return
+        if not force and self._remote_check_timer < self._remote_check_interval:
+            return
+
+        self._remote_check_timer = 0.0
+        self._remote_check_running = True
+
+        def _worker() -> None:
+            status = False
+            try:
+                status = bool(self.service.is_remote_online())
+            except Exception:
+                status = False
+            self._remote_check_result = status
+            self._remote_check_running = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _update_remote_status(self, dt: float) -> None:
+        self._remote_check_timer += max(0.0, float(dt))
+
+        if self._remote_check_result is not None:
+            self._remote_online = bool(self._remote_check_result)
+            self._remote_check_result = None
+
+        if self._remote_online is None and not self._remote_check_running:
+            self._request_remote_status_check(force=True)
+            return
+
+        if self._remote_check_timer >= self._remote_check_interval:
+            self._request_remote_status_check(force=False)
+
+    def _draw_remote_status_badge(self) -> None:
+        badge = pygame.Rect(0, 0, 212, 40)
+        badge.topright = (self.width - 18, 18)
+
+        if self._remote_online is None:
+            label = "CHECKING STATUS"
+            bg = (72, 72, 52, 220)
+            border = (220, 196, 120)
+            dot_color = (248, 218, 130)
+        elif self._remote_online:
+            label = "ONLINE MODE"
+            if self._remote_check_running:
+                label = "ONLINE MODE *"
+            bg = (34, 78, 52, 220)
+            border = (128, 224, 174)
+            dot_color = (130, 244, 178)
+        else:
+            label = "OFFLINE MODE"
+            if self._remote_check_running:
+                label = "OFFLINE MODE *"
+            bg = (86, 42, 42, 220)
+            border = (236, 154, 154)
+            dot_color = (255, 168, 168)
+
+        _draw_rounded_rect(self.screen, badge, bg, border, 2, 12)
+        dot_center = (badge.left + 20, badge.centery)
+        pygame.draw.circle(self.screen, dot_color, dot_center, 6)
+
+        label_surf = self._font_tiny.render(label, True, (244, 248, 255))
+        self.screen.blit(label_surf, label_surf.get_rect(midleft=(badge.left + 34, badge.centery)))
+
+    def _wrap_text(self, font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+        words = str(text).split()
+        if not words:
+            return [""]
+
+        lines: list[str] = []
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if font.size(candidate)[0] <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+        return lines
+
+    def _set_auth_popup(
+        self,
+        *,
+        title: str,
+        lines: list[str],
+        action: str = "info",
+        primary_label: str = "OK",
+        secondary_label: str | None = None,
+    ) -> None:
+        self._auth_popup_visible = True
+        self._auth_popup_title = str(title)
+        self._auth_popup_lines = [str(line) for line in lines if str(line).strip()]
+        self._auth_popup_action = str(action)
+        self._auth_popup_primary_label = str(primary_label)
+        self._auth_popup_secondary_label = str(secondary_label) if secondary_label else None
+
+    def _clear_auth_popup(self) -> None:
+        self._auth_popup_visible = False
+        self._auth_popup_title = ""
+        self._auth_popup_lines = []
+        self._auth_popup_action = "info"
+        self._auth_popup_primary_label = "OK"
+        self._auth_popup_secondary_label = None
+        self._auth_popup_primary_rect = pygame.Rect(0, 0, 0, 0)
+        self._auth_popup_secondary_rect = pygame.Rect(0, 0, 0, 0)
+
+    def _draw_auth_popup(self) -> None:
+        if not self._auth_popup_visible:
+            return
+
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 182))
+        self.screen.blit(overlay, (0, 0))
+
+        popup = pygame.Rect(0, 0, min(680, self.width - 120), min(320, self.height - 160))
+        popup.center = (self.width // 2, self.height // 2 + 8)
+        _draw_rounded_rect(self.screen, popup, (16, 24, 44, 236), (126, 172, 235), 3, 16)
+
+        title = self._font_profile_label.render(self._auth_popup_title or "NOTICE", True, (242, 247, 255))
+        self.screen.blit(title, title.get_rect(center=(popup.centerx, popup.top + 40)))
+
+        max_text_w = popup.width - 64
+        line_y = popup.top + 82
+        for raw_line in self._auth_popup_lines:
+            for wrapped in self._wrap_text(self._font_small, raw_line, max_text_w):
+                line_surf = self._font_small.render(wrapped, True, (206, 222, 246))
+                self.screen.blit(line_surf, line_surf.get_rect(center=(popup.centerx, line_y)))
+                line_y += 24
+
+        btn_y = popup.bottom - 52
+        if self._auth_popup_secondary_label:
+            self._auth_popup_primary_rect = pygame.Rect(0, 0, 180, 44)
+            self._auth_popup_secondary_rect = pygame.Rect(0, 0, 180, 44)
+            self._auth_popup_primary_rect.center = (popup.centerx - 102, btn_y)
+            self._auth_popup_secondary_rect.center = (popup.centerx + 102, btn_y)
+
+            _draw_rounded_rect(
+                self.screen,
+                self._auth_popup_primary_rect,
+                (70, 136, 102, 235),
+                (194, 236, 204),
+                2,
+                10,
+            )
+            _draw_rounded_rect(
+                self.screen,
+                self._auth_popup_secondary_rect,
+                (74, 94, 130, 235),
+                (186, 204, 234),
+                2,
+                10,
+            )
+            primary = self._font_small.render(self._auth_popup_primary_label, True, (248, 252, 250))
+            secondary = self._font_small.render(self._auth_popup_secondary_label, True, (244, 248, 255))
+            self.screen.blit(primary, primary.get_rect(center=self._auth_popup_primary_rect.center))
+            self.screen.blit(secondary, secondary.get_rect(center=self._auth_popup_secondary_rect.center))
+        else:
+            self._auth_popup_primary_rect = pygame.Rect(0, 0, 210, 44)
+            self._auth_popup_primary_rect.center = (popup.centerx, btn_y)
+            self._auth_popup_secondary_rect = pygame.Rect(0, 0, 0, 0)
+            _draw_rounded_rect(
+                self.screen,
+                self._auth_popup_primary_rect,
+                (70, 136, 102, 235),
+                (194, 236, 204),
+                2,
+                10,
+            )
+            primary = self._font_small.render(self._auth_popup_primary_label, True, (248, 252, 250))
+            self.screen.blit(primary, primary.get_rect(center=self._auth_popup_primary_rect.center))
+
+    def _activate_auth_popup_primary(self) -> None:
+        action = self._auth_popup_action
+        if action == "register":
+            self._state = "register"
+            self._focus = "username"
+            self._password_input = ""
+            self.message = "Create a new account to continue."
+            self.message_color = (190, 220, 255)
+        self._clear_auth_popup()
+
+    def _activate_auth_popup_secondary(self) -> None:
+        self._clear_auth_popup()
+
+    def _handle_auth_popup_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                self._activate_auth_popup_secondary()
+                return
+            if event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                self._activate_auth_popup_primary()
+                return
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self._auth_popup_primary_rect.collidepoint(event.pos):
+                self._activate_auth_popup_primary()
+                return
+            if self._auth_popup_secondary_label and self._auth_popup_secondary_rect.collidepoint(event.pos):
+                self._activate_auth_popup_secondary()
+                return
+
+    def _show_login_guidance_popup(self, message: str) -> None:
+        text = str(message).strip().lower()
+        if "not found on local or online server" in text:
+            self._set_auth_popup(
+                title="ACCOUNT NOT FOUND",
+                lines=[
+                    "No account was found locally or on the online server.",
+                    "Please register a new account to continue.",
+                ],
+                action="register",
+                primary_label="REGISTER",
+                secondary_label="BACK",
+            )
+            return
+
+        if "connect to internet" in text and "local" in text:
+            self._set_auth_popup(
+                title="ONLINE ACCOUNT CHECK",
+                lines=[
+                    "This account was not found in your local database.",
+                    "Connect to internet and press LOGIN again",
+                    "to check if you have this account online.",
+                ],
+                action="connect",
+                primary_label="OK",
+            )
+            return
+
+        if "online check failed" in text:
+            self._set_auth_popup(
+                title="CONNECTION REQUIRED",
+                lines=[
+                    "The online account check failed.",
+                    "Connect to internet and try LOGIN again.",
+                ],
+                action="connect",
+                primary_label="OK",
+            )
 
     def _draw_tutorial_button(self) -> None:
         mouse_pos = pygame.mouse.get_pos()
@@ -308,6 +576,8 @@ class AccountPortalScreen:
         pass_rect = pygame.Rect(0, 0, 420, 50)
         user_rect.center = (panel.centerx, panel.top + 206)
         pass_rect.center = (panel.centerx, panel.top + 276)
+        self._auth_username_rect = user_rect.copy()
+        self._auth_password_rect = pass_rect.copy()
 
         self._draw_input_box(user_rect, "USERNAME", self._username_input, self._focus == "username")
         self._draw_input_box(pass_rect, "PASSWORD", "*" * len(self._password_input), self._focus == "password")
@@ -325,7 +595,7 @@ class AccountPortalScreen:
         cancel_txt = self._font_small.render("BACK", True, (246, 247, 255))
         self.screen.blit(cancel_txt, cancel_txt.get_rect(center=self._button_rects["cancel"].center))
 
-        hint = self._font_tiny.render("TAB switches field. ENTER submits.", True, (170, 185, 214))
+        hint = self._font_tiny.render("Click a field or TAB to switch. ENTER submits.", True, (170, 185, 214))
         self.screen.blit(hint, hint.get_rect(center=(panel.centerx, panel.top + 412)))
 
     def _draw_input_box(self, rect: pygame.Rect, label: str, value: str, focused: bool) -> None:
@@ -337,8 +607,32 @@ class AccountPortalScreen:
         self.screen.blit(label_surf, (rect.left + 12, rect.top - 18))
 
         text = value if value else ""
-        text_surf = self._font_small.render(text, True, (245, 248, 255))
-        self.screen.blit(text_surf, (rect.left + 12, rect.centery - text_surf.get_height() // 2))
+        cursor_visible = bool(focused and (pygame.time.get_ticks() // 450) % 2 == 0)
+        cursor_w = 8 if cursor_visible else 0
+        max_text_w = max(20, rect.width - 24 - cursor_w)
+        display_text = self._fit_input_text(text, max_text_w)
+
+        text_surf = self._font_small.render(display_text, True, (245, 248, 255))
+        text_pos = (rect.left + 12, rect.centery - text_surf.get_height() // 2)
+        self.screen.blit(text_surf, text_pos)
+
+        if cursor_visible:
+            cursor_x = text_pos[0] + text_surf.get_width() + 2
+            cursor_top = rect.centery - text_surf.get_height() // 2
+            cursor_bottom = cursor_top + text_surf.get_height()
+            pygame.draw.line(self.screen, (235, 244, 255), (cursor_x, cursor_top), (cursor_x, cursor_bottom), 2)
+
+    def _fit_input_text(self, text: str, max_width: int) -> str:
+        if self._font_small.size(text)[0] <= max_width:
+            return text
+
+        ellipsis = "..."
+        trimmed = text
+        while trimmed and self._font_small.size(ellipsis + trimmed)[0] > max_width:
+            trimmed = trimmed[1:]
+        if not trimmed:
+            return ellipsis
+        return ellipsis + trimmed
 
     def _draw_stats_toggle(self, panel: pygame.Rect, key_prefix: str, y: int, active_mode: str) -> None:
         btn_w = 158
@@ -697,10 +991,15 @@ class AccountPortalScreen:
         return None
 
     def _handle_auth_event(self, event: pygame.event.Event) -> dict[str, str | None] | None:
+        if self._auth_popup_visible:
+            self._handle_auth_popup_event(event)
+            return None
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self._state = "menu"
                 self.message = ""
+                self._clear_auth_popup()
                 return None
             if event.key == pygame.K_TAB:
                 self._focus = "password" if self._focus == "username" else "username"
@@ -723,12 +1022,19 @@ class AccountPortalScreen:
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             pos = event.pos
+            if self._auth_username_rect.collidepoint(pos):
+                self._focus = "username"
+                return None
+            if self._auth_password_rect.collidepoint(pos):
+                self._focus = "password"
+                return None
             if self._button_rects.get("submit") and self._button_rects["submit"].collidepoint(pos):
                 self._submit_auth()
                 return None
             if self._button_rects.get("cancel") and self._button_rects["cancel"].collidepoint(pos):
                 self._state = "menu"
                 self.message = ""
+                self._clear_auth_popup()
                 return None
 
         return None
@@ -763,9 +1069,11 @@ class AccountPortalScreen:
             self.message = "Login successful."
             self.message_color = (170, 235, 180)
             self._password_input = ""
+            self._clear_auth_popup()
         else:
             self.message = msg
             self.message_color = (255, 175, 175)
+            self._show_login_guidance_popup(msg)
 
     def _handle_profile_event(self, event: pygame.event.Event) -> dict[str, str | None] | None:
         if event.type == pygame.KEYDOWN:
@@ -837,6 +1145,8 @@ class AccountPortalScreen:
     def _refresh_leaderboard(self) -> None:
         online = self.service.is_remote_online()
         self._leaderboard_online = bool(online)
+        self._remote_online = bool(online)
+        self._remote_check_timer = 0.0
         mode_label = "Ranked" if self._leaderboard_view_mode == "ranked" else "Unranked"
         if online:
             entries = self.service.fetch_remote_leaderboard(

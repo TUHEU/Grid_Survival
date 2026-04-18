@@ -22,6 +22,7 @@ from water import AnimatedWater
 from tile_system import TMXTileManager, TileState
 from hazards import HazardManager
 from ui import GameHUD, EliminationScreen, VictoryScreen
+from scenes.common import draw_online_status_badge, update_online_status
 from settings import (
     BACKGROUND_COLOR,
     BACKGROUND_MUSIC_TRACKS,
@@ -904,6 +905,26 @@ class GameManager:
             self.screen.blit(text, text_rect)
             self.screen.blit(sub_text, sub_rect)
             self.screen.blit(menu_text, menu_rect)
+
+        reserved: list[pygame.Rect] = []
+        for rect in (
+            self.hud.pause_rect,
+            self.hud.mute_rect,
+            self.hud.volume_rect,
+            self.hud.timer_rect,
+            self.hud.alive_rect,
+        ):
+            if isinstance(rect, pygame.Rect):
+                reserved.append(rect)
+        for rect in self.hud.player_card_rects:
+            if isinstance(rect, pygame.Rect):
+                reserved.append(rect)
+
+        draw_online_status_badge(
+            self.screen,
+            reserved_rects=reserved,
+            preferred_corners=("bottom-right", "top-right", "bottom-left", "top-left"),
+        )
 
         pygame.display.flip()
 
@@ -1837,6 +1858,7 @@ class GameManager:
     def run(self):
         while self.running:
             dt = self.clock.tick(TARGET_FPS) / 1000.0
+            update_online_status(dt)
             self.handle_events()
             keys = pygame.key.get_pressed()
             self.update(dt, keys)
