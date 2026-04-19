@@ -17,7 +17,13 @@ from settings import (
     TARGET_FPS,
     WINDOW_SIZE,
 )
-from .common import SceneAudioOverlay, _draw_rounded_rect, _load_font
+from .common import (
+    SceneAudioOverlay,
+    _draw_rounded_rect,
+    _load_font,
+    set_menu_sync_indicator_result,
+    set_menu_sync_indicator_running,
+)
 from .title_screen import TitleScreen
 
 
@@ -1094,7 +1100,13 @@ class AccountPortalScreen:
                 return None
             if self._button_rects.get("sync") and self._button_rects["sync"].collidepoint(pos):
                 if self.current_username:
-                    synced = self.service.sync_pending(self.current_username)
+                    set_menu_sync_indicator_running()
+                    synced = False
+                    try:
+                        synced = bool(self.service.sync_pending(self.current_username))
+                    except Exception:
+                        synced = False
+                    set_menu_sync_indicator_result(synced)
                     self._profile_cache = self.service.get_profile(self.current_username)
                     self.message = "Synced with VPS." if synced else "Sync skipped (offline or API unavailable)."
                     self.message_color = (180, 210, 255) if synced else (255, 210, 165)

@@ -81,12 +81,9 @@ class GameManager:
         self.network_player_names = [str(name) for name in (network_player_names or [])]
         self._ranked_override = None if ranked_override is None else bool(ranked_override)
         self._guest_rr = 1000
-        self._account_sync_timer = 0.0
-        self._account_sync_interval = 20.0
         self._match_result_serial = 0
         self._last_applied_match_result_id: str | None = None
         if self.account_service and self.account_username:
-            self._sync_account_now()
             profile = self.account_service.get_profile(self.account_username)
             if profile is not None:
                 self._guest_rr = int(profile.rr)
@@ -323,12 +320,6 @@ class GameManager:
 
     def update(self, dt: float, keys):
         self.audio.update()
-
-        if self.account_service and self.account_username:
-            self._account_sync_timer += dt
-            if self._account_sync_timer >= self._account_sync_interval:
-                self._account_sync_timer = 0.0
-                self._sync_account_now()
 
         if getattr(self, "paused", False):
             if self.is_network_game and self.network and self.network.connected:
@@ -1469,10 +1460,6 @@ class GameManager:
         # Default behavior: LAN/online matches are ranked, campaign/local multiplayer are unranked.
         return self.game_mode == MODE_ONLINE_MULTIPLAYER
 
-    def _sync_account_now(self) -> None:
-        if self.account_service and self.account_username:
-            self.account_service.sync_pending(self.account_username)
-
     @staticmethod
     def _clamp01(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
@@ -1785,7 +1772,6 @@ class GameManager:
             is_draw=is_draw,
             ranked_mode_override=ranked_mode_override,
         )
-        self._sync_account_now()
         ranked_mode = self._is_ranked_mode() if ranked_mode_override is None else bool(ranked_mode_override)
         if ranked_mode:
             rr_start = int(self._match_rr_start)
