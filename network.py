@@ -122,6 +122,7 @@ class NetworkManager:
         {
             "disconnect",
             "game_start",
+            "match_result",
             "pause_state",
             "pause_toggle_request",
             "restart_request",

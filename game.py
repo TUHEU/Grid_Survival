@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from typing import Any
 
 import pygame
 
@@ -82,6 +83,8 @@ class GameManager:
         self._guest_rr = 1000
         self._account_sync_timer = 0.0
         self._account_sync_interval = 20.0
+        self._match_result_serial = 0
+        self._last_applied_match_result_id: str | None = None
         if self.account_service and self.account_username:
             self._sync_account_now()
             profile = self.account_service.get_profile(self.account_username)
@@ -105,11 +108,15 @@ class GameManager:
         self._last_client_snapshot_time = -1.0
         self._last_client_world_snapshot_time = -1.0
         self._client_position_blend = 0.35
+        self._client_local_position_blend = 0.30
         self._client_snap_distance = 180.0
+        self._client_snapshot_gap = self._snapshot_interval
+        self._client_prediction_enabled = True
+        self._client_remote_extrapolation_cap = 1 / 20
         # Rate-limiting for client input messages: only send when the state
         # changes or when the minimum interval has elapsed (30 Hz cap).
         self._input_send_timer: float = 0.0
-        self._input_send_interval: float = 1 / 30
+        self._input_send_interval: float = 1 / 45
         self._last_sent_input: dict | None = None
         self.level_map_path = Path(level_map_path) if level_map_path else None
         self.level_background_path = Path(level_background_path) if level_background_path else None
@@ -361,7 +368,7 @@ class GameManager:
                     self.network.send_message("input_state", input=local_input)
                     self._last_sent_input = dict(local_input)
                     self._input_send_timer = 0.0
-                self._update_client_network_game(dt)
+                self._update_client_network_game(dt, local_input)
                 self._pending_power_press = False
                 return
 
@@ -569,7 +576,7 @@ class GameManager:
             self._pending_power_press = False
             self._authoritative_network_inputs = None
 
-    def _update_client_network_game(self, dt: float):
+    def _update_client_network_game(self, dt: float, local_input: dict | None = None):
         self.water.update(dt)
         # Advance tile crumbling/warning animations locally so they are smooth
         # between host snapshots.  Previously missing, making tiles appear frozen
@@ -580,18 +587,62 @@ class GameManager:
             self.pacman_enemy_manager.advance_visuals(dt)
         if self.elimination_screen:
             self.elimination_screen.update(dt)
+
+        local_player = self._local_network_player()
+        predicted_local = False
+        if (
+            self._client_prediction_enabled
+            and isinstance(local_input, dict)
+            and local_player is not None
+            and local_player not in self.eliminated_players
+            and not bool(self.paused)
+            and not bool(self.game_over)
+        ):
+            # Client-side prediction: run local movement immediately for responsive
+            # controls, then reconcile toward host snapshots as they arrive.
+            local_player.update_from_input_state(
+                dt,
+                local_input,
+                self.walkable_mask,
+                self.walkable_bounds,
+            )
+            if local_player.power:
+                local_player.power.update(dt, local_player)
+            predicted_local = True
+
+        extrapolation_dt = min(max(0.0, float(dt)), self._client_remote_extrapolation_cap)
         for player in self.players:
             player._eliminated = player in self.eliminated_players
+
+            if player is not local_player and not player._eliminated:
+                # Lightweight dead-reckoning between snapshots reduces visible
+                # stepping when packets arrive unevenly.
+                if not player.falling and not player.drowning and str(getattr(player, "state", "")) != "death":
+                    delta = pygame.Vector2(player.velocity) * extrapolation_dt
+                    max_step = 18.0
+                    if delta.length_squared() > max_step * max_step:
+                        delta.scale_to_length(max_step)
+                    if delta.length_squared() > 0.0:
+                        if self.walkable_mask is not None and hasattr(player, "_attempt_move"):
+                            player._attempt_move(delta, self.walkable_mask)
+                        else:
+                            player.position += delta
+                        player.rect.center = (round(player.position.x), round(player.position.y))
+
+            if predicted_local and player is local_player:
+                continue
             player.current_animation.update(dt)
 
     def _process_network_messages(self):
         latest_snapshot = None
         latest_world_snapshot = None
+        latest_match_result = None
+        saw_disconnect = False
         for message in self.network.get_messages():
             message_type = message.get("type")
             if message_type == "disconnect":
-                self.running = False
-                return
+                saw_disconnect = True
+                continue
             if message_type == "pause_state":
                 self.paused = bool(message.get("paused", False))
             elif self.is_network_host and message_type == "pause_toggle_request":
@@ -604,11 +655,18 @@ class GameManager:
                 latest_snapshot = message.get("state")
             elif (not self.is_network_host) and message_type == "world_snapshot":
                 latest_world_snapshot = message.get("state")
+            elif (not self.is_network_host) and message_type == "match_result":
+                latest_match_result = message.get("state")
 
         if latest_snapshot is not None:
             self._apply_network_snapshot(latest_snapshot)
         if latest_world_snapshot is not None:
             self._apply_network_world_snapshot(latest_world_snapshot)
+        if latest_match_result is not None:
+            self._apply_network_match_result(latest_match_result)
+        if saw_disconnect:
+            self.running = False
+            return
 
     def _build_local_input_state(self, keys) -> dict:
         player = self._local_network_player()
@@ -691,7 +749,18 @@ class GameManager:
             return player_state
 
         local_player = self._local_network_player()
-        blend = 0.58 if player is local_player else self._client_position_blend
+        base_blend = (
+            self._client_local_position_blend
+            if player is local_player
+            else self._client_position_blend
+        )
+        expected_interval = max(1e-4, float(self._snapshot_interval))
+        gap_ratio = max(0.7, min(1.8, float(self._client_snapshot_gap) / expected_interval))
+        blend = min(0.9, base_blend * gap_ratio)
+        if distance > 72.0:
+            blend = min(0.95, blend + 0.12)
+        if distance < 3.0:
+            blend = 1.0
         blended = dict(player_state)
         blended["x"] = current.x + (target.x - current.x) * blend
         blended["y"] = current.y + (target.y - current.y) * blend
@@ -751,9 +820,14 @@ class GameManager:
         if not isinstance(snapshot, dict):
             return
 
+        previous_time = self._last_client_snapshot_time
         incoming_time = float(snapshot.get("time_since_start", self._time_since_start))
         if incoming_time + 1e-6 < self._last_client_snapshot_time:
             return
+        if previous_time >= 0.0:
+            gap = incoming_time - previous_time
+            if gap > 0.0:
+                self._client_snapshot_gap = min(0.5, gap)
         self._last_client_snapshot_time = incoming_time
         self._time_since_start = incoming_time
         self.paused = bool(snapshot.get("paused", self.paused))
@@ -1229,7 +1303,62 @@ class GameManager:
                 self._restart_game(reset_match=False)
             return
 
-        action = self._run_round_transition(winner_index, winner_label, is_draw=False)
+        mvp_index = self._compute_mvp_index()
+        match_result = self._build_network_match_result(
+            winner_index=winner_index,
+            mvp_index=mvp_index,
+            is_draw=False,
+        )
+        if self.is_network_game and self.is_network_host and self.network and self.network.connected:
+            # Send authoritative final result so the joining client applies the
+            # same RR/stats delta to their own local account data.
+            self.network.send_message("snapshot", state=self._build_network_snapshot())
+            self.network.send_message(
+                "match_result",
+                state=match_result,
+            )
+
+        payload_winner = match_result.get("winner_index", winner_index)
+        try:
+            payload_winner_index = int(payload_winner)
+        except (TypeError, ValueError):
+            payload_winner_index = winner_index
+        if payload_winner_index < 0 or payload_winner_index >= len(self.players):
+            payload_winner_index = None
+
+        payload_mvp = match_result.get("mvp_index", mvp_index)
+        try:
+            payload_mvp_index = int(payload_mvp)
+        except (TypeError, ValueError):
+            payload_mvp_index = mvp_index
+        if payload_mvp_index < 0 or payload_mvp_index >= len(self.players):
+            payload_mvp_index = self._compute_mvp_index()
+
+        payload_is_draw = bool(match_result.get("is_draw", False))
+        payload_ranked_mode = (
+            match_result.get("ranked_mode")
+            if isinstance(match_result.get("ranked_mode"), bool)
+            else None
+        )
+        if payload_is_draw:
+            payload_winner_label = "Draw"
+        elif payload_winner_index is not None and payload_winner_index < len(self._match_player_stats):
+            payload_winner_label = str(
+                self._match_player_stats[payload_winner_index].get(
+                    "username",
+                    self._resolve_player_label(payload_winner_index),
+                )
+            )
+        else:
+            payload_winner_label = winner_label
+
+        action = self._run_round_transition(
+            payload_winner_index,
+            payload_winner_label,
+            is_draw=payload_is_draw,
+            mvp_index=payload_mvp_index,
+            ranked_mode_override=payload_ranked_mode,
+        )
         if action == "quit":
             self.running = False
             return
@@ -1413,11 +1542,146 @@ class GameManager:
         loss = int(round((1.0 - score) * 30.0))
         return -max(0, min(30, loss))
 
+    def _build_network_match_result(
+        self,
+        winner_index: int | None,
+        mvp_index: int,
+        is_draw: bool = False,
+    ) -> dict:
+        self._match_result_serial += 1
+        match_stats: list[dict[str, Any]] = []
+        for idx in range(len(self.players)):
+            row = self._match_player_stats[idx] if idx < len(self._match_player_stats) else self._new_match_stat_row(idx)
+            match_stats.append(
+                {
+                    "username": str(row.get("username", self._resolve_player_label(idx))),
+                    "character": str(row.get("character", getattr(self.players[idx], "character_name", "Caveman"))),
+                    "rounds_played": int(max(0, row.get("rounds_played", 0))),
+                    "rounds_won": int(max(0, row.get("rounds_won", 0))),
+                    "eliminations": int(max(0, row.get("eliminations", 0))),
+                    "deaths": int(max(0, row.get("deaths", 0))),
+                    "damage_dealt": int(max(0, row.get("damage_dealt", 0))),
+                    "damage_taken": int(max(0, row.get("damage_taken", 0))),
+                    "survival_time": float(max(0.0, row.get("survival_time", 0.0))),
+                }
+            )
+
+        winner_value = int(winner_index) if winner_index is not None else -1
+        result_id = f"match_result_{self._match_result_serial}_{int(self._time_since_start * 1000)}"
+        return {
+            "result_id": result_id,
+            "winner_index": winner_value,
+            "mvp_index": int(max(0, mvp_index)),
+            "is_draw": bool(is_draw),
+            "match_complete": bool(self._match_complete),
+            "ranked_mode": bool(self._is_ranked_mode()),
+            "round_wins": [int(value) for value in self.round_wins],
+            "match_stats": match_stats,
+        }
+
+    def _apply_network_match_result(self, state: Any) -> None:
+        if self.is_network_host or not isinstance(state, dict):
+            return
+
+        raw_result_id = state.get("result_id")
+        result_id = str(raw_result_id).strip() if raw_result_id is not None else ""
+        if result_id and result_id == self._last_applied_match_result_id:
+            return
+
+        ranked_mode_override = state.get("ranked_mode") if isinstance(state.get("ranked_mode"), bool) else None
+        is_draw = bool(state.get("is_draw", False))
+        self._match_complete = bool(state.get("match_complete", self._match_complete))
+
+        incoming_round_wins = state.get("round_wins")
+        if isinstance(incoming_round_wins, list):
+            self.round_wins = [int(max(0, value)) for value in incoming_round_wins]
+            if len(self.round_wins) < len(self.players):
+                self.round_wins.extend([0] * (len(self.players) - len(self.round_wins)))
+            elif len(self.round_wins) > len(self.players):
+                self.round_wins = self.round_wins[: len(self.players)]
+            self.hud.set_round_scoreboard(self.round_wins, self.target_score)
+
+        incoming_stats = state.get("match_stats")
+        if isinstance(incoming_stats, list) and incoming_stats:
+            rebuilt_stats: list[dict[str, Any]] = []
+            for idx in range(len(self.players)):
+                entry = incoming_stats[idx] if idx < len(incoming_stats) and isinstance(incoming_stats[idx], dict) else {}
+                rebuilt_stats.append(
+                    {
+                        "username": str(entry.get("username", self._resolve_player_label(idx))),
+                        "character": str(entry.get("character", getattr(self.players[idx], "character_name", "Caveman"))),
+                        "rounds_played": int(max(0, entry.get("rounds_played", 0))),
+                        "rounds_won": int(max(0, entry.get("rounds_won", 0))),
+                        "eliminations": int(max(0, entry.get("eliminations", 0))),
+                        "deaths": int(max(0, entry.get("deaths", 0))),
+                        "damage_dealt": int(max(0, entry.get("damage_dealt", 0))),
+                        "damage_taken": int(max(0, entry.get("damage_taken", 0))),
+                        "survival_time": float(max(0.0, entry.get("survival_time", 0.0))),
+                    }
+                )
+            self._match_player_stats = rebuilt_stats
+
+        raw_winner_index = state.get("winner_index", -1)
+        try:
+            winner_index = int(raw_winner_index)
+        except (TypeError, ValueError):
+            winner_index = -1
+        if winner_index < 0 or winner_index >= len(self.players):
+            winner_index = None
+
+        raw_mvp_index = state.get("mvp_index", 0)
+        try:
+            mvp_index = int(raw_mvp_index)
+        except (TypeError, ValueError):
+            mvp_index = 0
+        if mvp_index < 0 or mvp_index >= len(self.players):
+            mvp_index = 0
+
+        if result_id:
+            self._last_applied_match_result_id = result_id
+        else:
+            self._last_applied_match_result_id = f"legacy_{winner_index}_{mvp_index}_{int(self._time_since_start * 1000)}"
+
+        if is_draw:
+            winner_label = "Draw"
+        elif winner_index is not None and winner_index < len(self._match_player_stats):
+            winner_label = str(
+                self._match_player_stats[winner_index].get(
+                    "username",
+                    self._resolve_player_label(winner_index),
+                )
+            )
+        elif winner_index is not None:
+            winner_label = self._resolve_player_label(winner_index)
+        else:
+            winner_label = self.player_name
+
+        action = self._run_round_transition(
+            winner_index,
+            winner_label,
+            is_draw=is_draw,
+            mvp_index=mvp_index,
+            ranked_mode_override=ranked_mode_override,
+        )
+        if action == "quit":
+            self.running = False
+            return
+        if action == "menu":
+            if self.is_network_game and self.network and self.network.connected:
+                self.network.send_message("disconnect")
+            self.return_to_main_menu = True
+            self.running = False
+            return
+
+        self.return_to_main_menu = True
+        self.running = False
+
     def _apply_local_account_round_result(
         self,
         winner_index: int | None,
         mvp_index: int,
         is_draw: bool = False,
+        ranked_mode_override: bool | None = None,
     ) -> tuple[str, int, int, int]:
         local_index = self._local_account_index()
         local_label = self.account_username or self.player_name
@@ -1428,7 +1692,7 @@ class GameManager:
         if local_index is None:
             return local_label, rr_before, rr_after, rr_delta
 
-        ranked_mode = self._is_ranked_mode()
+        ranked_mode = self._is_ranked_mode() if ranked_mode_override is None else bool(ranked_mode_override)
         rr_delta = self._compute_rr_delta(
             local_index,
             winner_index,
@@ -1499,17 +1763,30 @@ class GameManager:
             )
         return rows
 
-    def _run_round_transition(self, winner_index: int | None, winner_label: str, is_draw: bool = False) -> str:
-        mvp_index = self._compute_mvp_index()
-        mvp_name = self._match_player_stats[mvp_index]["username"] if self._match_player_stats else winner_label
+    def _run_round_transition(
+        self,
+        winner_index: int | None,
+        winner_label: str,
+        is_draw: bool = False,
+        mvp_index: int | None = None,
+        ranked_mode_override: bool | None = None,
+    ) -> str:
+        if mvp_index is None:
+            mvp_index = self._compute_mvp_index()
+        if self._match_player_stats:
+            mvp_index = max(0, min(len(self._match_player_stats) - 1, int(mvp_index)))
+            mvp_name = self._match_player_stats[mvp_index]["username"]
+        else:
+            mvp_name = winner_label
 
         rr_user, _rr_before, rr_after, _rr_delta = self._apply_local_account_round_result(
             winner_index,
             mvp_index,
             is_draw=is_draw,
+            ranked_mode_override=ranked_mode_override,
         )
         self._sync_account_now()
-        ranked_mode = self._is_ranked_mode()
+        ranked_mode = self._is_ranked_mode() if ranked_mode_override is None else bool(ranked_mode_override)
         if ranked_mode:
             rr_start = int(self._match_rr_start)
             rr_screen = RRGainScreen(rr_user, rr_start, rr_after, "RANKED MATCH COMPLETE")
@@ -1551,6 +1828,9 @@ class GameManager:
         self._authoritative_network_inputs = None
         self._last_client_snapshot_time = -1.0
         self._last_client_world_snapshot_time = -1.0
+        self._client_snapshot_gap = self._snapshot_interval
+        if reset_match:
+            self._last_applied_match_result_id = None
         if self.account_service and self.account_username:
             profile = self.account_service.get_profile(self.account_username)
             if profile is not None:
