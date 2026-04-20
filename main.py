@@ -23,6 +23,7 @@ from scenes import (
     TargetScoreSelectionScreen,
 )
 from scenes.common import SceneAudioOverlay, _draw_rounded_rect, _load_font, set_online_status_service
+from scenes.common import set_menu_sync_indicator_result, set_menu_sync_indicator_running
 from scenes.level_selection import resolve_level_option
 from settings import (
     FONT_PATH_BODY,
@@ -309,6 +310,19 @@ def _wait_for_online_match_start(
         clock.tick(30)
 
 
+def _sync_account_in_menu(account_service: AccountService, username: str | None) -> None:
+    """Run account sync only from menu flow (never during gameplay)."""
+    if not username:
+        return
+    set_menu_sync_indicator_running()
+    synced = False
+    try:
+        synced = bool(account_service.sync_pending(username))
+    except Exception:
+        synced = False
+    set_menu_sync_indicator_result(synced)
+
+
 def main():
     pygame.init()
     screen = pygame.display.set_mode(WINDOW_SIZE, WINDOW_FLAGS)
@@ -340,11 +354,11 @@ def main():
 
         player_name = str(account_result.get("player_name") or active_account_username or "Player")
         active_account_username = account_result.get("account_username") or None
-        if active_account_username:
-            account_service.sync_pending(active_account_username)
+        _sync_account_in_menu(account_service, active_account_username)
 
         while True:
             break_to_title = False
+            _sync_account_in_menu(account_service, active_account_username)
             mode_screen = ModeSelectionScreen(screen, clock, player_name)
             game_mode = mode_screen.run()
             if game_mode is None:
@@ -569,6 +583,7 @@ def main():
                 ).run()
                 
                 if result == "main_menu":
+                    _sync_account_in_menu(account_service, active_account_username)
                     break_to_title = True
                     break
                 else:
