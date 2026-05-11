@@ -100,6 +100,8 @@ class GameHUD:
         self.round_wins: list[int] = []
         self.target_score = 1
         self.warmup_round = False
+        self.players_ready = 0
+        self.target_players = 0
 
         # Timer urgency pulse
         self._pulse_timer = 0.0
@@ -284,8 +286,14 @@ class GameHUD:
         surface.blit(value_surf, (vx, vy))
 
     def _draw_warmup_banner(self, surface: pygame.Surface):
-        label_surf = self._font_label.render("WARM-UP ROUND", True, HUD_TIMER_URGENT_COLOR)
-        value_surf = self._font_value.render("NO RR WILL COUNT THIS ROUND", True, HUD_VALUE_COLOR)
+        # If players_ready is set, show the ready counter; otherwise show generic warmup message
+        if self.target_players > 0:
+            label_surf = self._font_label.render("WARMUP ROUND", True, HUD_TIMER_URGENT_COLOR)
+            ready_text = f"{self.players_ready}/{self.target_players} READY"
+            value_surf = self._font_value.render(ready_text, True, HUD_VALUE_COLOR)
+        else:
+            label_surf = self._font_label.render("WARM-UP ROUND", True, HUD_TIMER_URGENT_COLOR)
+            value_surf = self._font_value.render("NO RR WILL COUNT THIS ROUND", True, HUD_VALUE_COLOR)
 
         panel_w = max(label_surf.get_width(), value_surf.get_width()) + HUD_PANEL_PADDING_H * 2
         panel_h = label_surf.get_height() + value_surf.get_height() + HUD_PANEL_PADDING_V * 3
@@ -393,6 +401,8 @@ class GameHUD:
             self.round_wins = [int(max(0, value)) for value in wins]
         self.target_score = max(1, int(snapshot.get("target_score", self.target_score)))
         self.warmup_round = bool(snapshot.get("warmup_round", self.warmup_round))
+        self.players_ready = int(snapshot.get("players_ready", self.players_ready))
+        self.target_players = int(snapshot.get("target_players", self.target_players))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

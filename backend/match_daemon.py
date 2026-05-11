@@ -613,6 +613,9 @@ class MatchDaemon:
                         if entry.get("addr") != addr:
                             continue
                         entry["last_input"] = p.get("input") or {}
+                        # Mark player as ready when they send their first input
+                        if not entry.get("player_ready", False):
+                            entry["player_ready"] = True
                         break
             return
 
@@ -1030,6 +1033,13 @@ class MatchDaemon:
             for entry in session.get("players", {}).values()
             if not bool(entry.get("eliminated", False))
         )
+        # Count players who have sent their first input (ready)
+        players_ready = sum(
+            1
+            for entry in session.get("players", {}).values()
+            if bool(entry.get("player_ready", False)) or bool(entry.get("bot", False))
+        )
+        target_players = int(len(players_list))
         target_score = int(session.get("assignment", {}).get("payload", {}).get("target_score", 3))
         elapsed = float(now - session.get("start_time", now))
         snapshot = {
@@ -1043,11 +1053,15 @@ class MatchDaemon:
             "end_state": session.get("end_state"),
             "warmup_round": bool(not session.get("warmup_round_consumed", False) and not session.get("match_complete", False)),
             "players": players_list,
+            "players_ready": int(players_ready),
+            "target_players": int(target_players),
             "hud": {
                 "survival_time": elapsed,
                 "score": 0,
                 "players_alive": int(alive_count),
                 "total_players": int(len(players_list)),
+                "players_ready": int(players_ready),
+                "target_players": int(target_players),
                 "round_wins": round_wins[: len(players_list)] if players_list else round_wins,
                 "target_score": target_score,
                 "warmup_round": bool(not session.get("warmup_round_consumed", False) and not session.get("match_complete", False)),
@@ -1386,6 +1400,21 @@ class MatchDaemon:
             for index, (name, entry) in enumerate(players)
             if not bool(entry.get("eliminated", False))
         ]
+        
+        # Auto-consume warmup if all players are ready (have sent input)
+        if not bool(session.get("warmup_round_consumed", False)):
+            players_ready = sum(
+                1
+                for entry in session.get("players", {}).values()
+                if bool(entry.get("player_ready", False)) or bool(entry.get("bot", False))
+            )
+            if players_ready >= len(players):
+                session["warmup_round_consumed"] = True
+                session["round_finished"] = True
+                session["game_over"] = False
+                session["round_restart_at"] = time.time() + ROUND_RESTART_DELAY
+                return
+        
         if len(alive) > 1:
             return
 

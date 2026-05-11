@@ -155,6 +155,13 @@ class GameManager:
         self._input_send_timer: float = 0.0
         self._input_send_interval: float = 1 / 60
         self._last_sent_input: dict | None = None
+        
+        # Warmup waiting state (for progressive player entry)
+        self._warmup_waiting = False
+        self._warmup_players_ready = 0
+        self._warmup_target_players = 0
+        self._last_warmup_update_time = 0.0
+        
         self.level_map_path = Path(level_map_path) if level_map_path else None
         self.level_background_path = Path(level_background_path) if level_background_path else None
         self.target_score = max(1, int(target_score))
@@ -3176,6 +3183,59 @@ class GameManager:
         if fallback_pool:
             return random.choice(fallback_pool)
         return self._character_choice(0) or "Caveman"
+
+    def _run_warmup_waiting(self):
+        """Wait for all players to be ready before starting the match."""
+        if not (self.is_network_game and not self.is_network_host):
+            return  # Only clients run this; servers manage their own state
+        
+        wait_start = time.time()
+        wait_timeout = 30.0  # Max 30 seconds to wait
+        font_title = pygame.font.Font(None, 72)
+        font_text = pygame.font.Font(None, 48)
+        
+        while self.running and time.time() - wait_start < wait_timeout:
+            dt = self.clock.tick(TARGET_FPS) / 1000.0
+            
+            # Handle events
+            self.handle_events()
+            
+            # Poll for network messages to get updated players_ready count
+            if self.network:
+                for message in self.network.get_messages():
+                    msg_type = message.get("type")
+                    if msg_type == "snapshot":
+                        snapshot = message.get("state") if isinstance(message.get("state"), dict) else message
+                        self._warmup_players_ready = int(snapshot.get("players_ready", 0))
+                        self._warmup_target_players = int(snapshot.get("target_players", 0))
+                        # Check if warmup is done (warmup_round becomes false OR all players ready)
+                        warmup_round = bool(snapshot.get("warmup_round", False))
+                        if not warmup_round or (self._warmup_players_ready >= self._warmup_target_players and self._warmup_target_players > 0):
+                            # Match is starting, exit waiting screen
+                            return
+            
+            # Draw waiting screen
+            self.screen.fill((20, 20, 20))
+            
+            # Draw title
+            title_text = "WARMUP WAITING"
+            title_surf = font_title.render(title_text, True, (200, 200, 200))
+            title_rect = title_surf.get_rect(center=(WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 3))
+            self.screen.blit(title_surf, title_rect)
+            
+            # Draw ready counter
+            ready_text = f"Players Ready: {self._warmup_players_ready}/{self._warmup_target_players}"
+            ready_surf = font_text.render(ready_text, True, (100, 200, 100))
+            ready_rect = ready_surf.get_rect(center=(WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2))
+            self.screen.blit(ready_surf, ready_rect)
+            
+            # Draw waiting message
+            wait_text = "Waiting for other players to join..."
+            wait_surf = pygame.font.Font(None, 36).render(wait_text, True, (150, 150, 150))
+            wait_rect = wait_surf.get_rect(center=(WINDOW_SIZE[0] // 2, WINDOW_SIZE[1] // 2 + 100))
+            self.screen.blit(wait_surf, wait_rect)
+            
+            pygame.display.flip()
 
     def run(self):
         frame_count = 0
