@@ -428,6 +428,33 @@ class MatchDaemon:
         )
         return registered_humans >= max(1, expected_humans)
 
+    def _ordered_session_players(self, session: dict) -> list[tuple[str, dict[str, Any]]]:
+        players = session.get("players", {})
+        if not isinstance(players, dict) or not players:
+            return []
+
+        ordered: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+        assigned_players = session.get("assignment", {}).get("payload", {}).get("players", [])
+        if isinstance(assigned_players, list):
+            for entry in assigned_players:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip()
+                if not name or name in seen:
+                    continue
+                player_entry = players.get(name)
+                if player_entry is None:
+                    continue
+                ordered.append((name, player_entry))
+                seen.add(name)
+
+        for name, player_entry in players.items():
+            if name in seen:
+                continue
+            ordered.append((name, player_entry))
+        return ordered
+
     def _ensure_round_wins(self, session: dict) -> list[int]:
         total = max(self._expected_player_count(session), len(session.get("players", {})))
         raw_wins = session.get("round_wins")
@@ -990,7 +1017,7 @@ class MatchDaemon:
     def _build_snapshot(self, session: dict) -> dict[str, Any]:
         now = time.time()
         players_list = []
-        for name, entry in session.get("players", {}).items():
+        for name, entry in self._ordered_session_players(session):
             players_list.append({
                 "player": self._player_entry_snapshot(entry),
                 "power": None,
@@ -1350,7 +1377,7 @@ class MatchDaemon:
         if not self._session_ready(session):
             return
 
-        players = list(session.get("players", {}).items())
+        players = self._ordered_session_players(session)
         if len(players) < 2:
             return
 

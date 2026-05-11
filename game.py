@@ -1230,11 +1230,29 @@ class GameManager:
         self.victory_screen = None
         self.elimination_screen = None
         self.game_over_state = None
-        for idx, entry in enumerate(snapshot.get("players", []) or []):
-            if idx >= len(self.players) or not isinstance(entry, dict):
+        snapshot_players = snapshot.get("players", []) or []
+        snapshot_by_name: dict[str, dict[str, Any]] = {}
+        ordered_snapshot_entries: list[dict[str, Any]] = []
+        for entry in snapshot_players:
+            if not isinstance(entry, dict):
+                continue
+            ordered_snapshot_entries.append(entry)
+            name = str(entry.get("name", "")).strip().lower()
+            if name:
+                snapshot_by_name[name] = entry
+
+        for idx, player in enumerate(self.players):
+            entry = None
+            expected_name = ""
+            if 0 <= idx < len(self.network_player_names):
+                expected_name = str(self.network_player_names[idx]).strip().lower()
+            if expected_name:
+                entry = snapshot_by_name.get(expected_name)
+            if entry is None and idx < len(ordered_snapshot_entries):
+                entry = ordered_snapshot_entries[idx]
+            if not isinstance(entry, dict):
                 continue
             player_state = entry.get("player") or {}
-            player = self.players[idx]
             blended_state = self._blend_client_player_snapshot(player, player_state)
             player.apply_snapshot_state(blended_state)
             apply_power_state(player.power, entry.get("power"))
