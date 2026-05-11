@@ -1033,13 +1033,28 @@ class MatchDaemon:
             for entry in session.get("players", {}).values()
             if not bool(entry.get("eliminated", False))
         )
-        # Count players who have sent their first input (ready)
+        # Count ONLY human players who have sent their first input (ready)
+        # Do NOT count bots; they are setup by the daemon, not joining progressively
         players_ready = sum(
             1
             for entry in session.get("players", {}).values()
-            if bool(entry.get("player_ready", False)) or bool(entry.get("bot", False))
+            if bool(entry.get("player_ready", False)) and not bool(entry.get("bot", False))
         )
-        target_players = int(len(players_list))
+        # Target players is the count of HUMAN players expected from the assignment, not total players
+        assignment_players = session.get("assignment", {}).get("payload", {}).get("players", [])
+        target_players_count = sum(
+            1
+            for player_entry in (assignment_players if isinstance(assignment_players, list) else [])
+            if isinstance(player_entry, dict) and not bool(player_entry.get("bot", False))
+        )
+        # Fallback: if no assignment data, count current non-bot players
+        if target_players_count == 0:
+            target_players_count = sum(
+                1
+                for entry in session.get("players", {}).values()
+                if not bool(entry.get("bot", False))
+            )
+        target_players = int(target_players_count)
         target_score = int(session.get("assignment", {}).get("payload", {}).get("target_score", 3))
         elapsed = float(now - session.get("start_time", now))
         snapshot = {
@@ -1401,14 +1416,29 @@ class MatchDaemon:
             if not bool(entry.get("eliminated", False))
         ]
         
-        # Auto-consume warmup if all players are ready (have sent input)
+        # Auto-consume warmup if all HUMAN players are ready (have sent input)
+        # Do NOT wait for bots; they are setup by daemon, not joining progressively
         if not bool(session.get("warmup_round_consumed", False)):
             players_ready = sum(
                 1
                 for entry in session.get("players", {}).values()
-                if bool(entry.get("player_ready", False)) or bool(entry.get("bot", False))
+                if bool(entry.get("player_ready", False)) and not bool(entry.get("bot", False))
             )
-            if players_ready >= len(players):
+            # Count expected human players from assignment
+            assignment_players = session.get("assignment", {}).get("payload", {}).get("players", [])
+            target_players_count = sum(
+                1
+                for player_entry in (assignment_players if isinstance(assignment_players, list) else [])
+                if isinstance(player_entry, dict) and not bool(player_entry.get("bot", False))
+            )
+            if target_players_count == 0:
+                target_players_count = sum(
+                    1
+                    for entry in session.get("players", {}).values()
+                    if not bool(entry.get("bot", False))
+                )
+            
+            if target_players_count > 0 and players_ready >= target_players_count:
                 session["warmup_round_consumed"] = True
                 session["round_finished"] = True
                 session["game_over"] = False
