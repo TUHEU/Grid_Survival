@@ -470,23 +470,37 @@ class ControlPlaneState:
             return {"ok": True, "match": staged_match, "lobby": self._serialize_lobby(lobby)}
 
     def _maybe_finalize_lobby_match(self, lobby: Lobby) -> dict[str, Any] | None:
-        if not isinstance(lobby.pending_match, dict) or not isinstance(lobby.match_config, dict):
+        # If there's no pending match, nothing to finalize.
+        if not isinstance(lobby.pending_match, dict):
             return None
 
-        all_selected = True
+        # Finalize as soon as any player has chosen a character.
+        any_selected = False
         for member in lobby.members.values():
-            if not str(member.get("character", "")).strip():
-                all_selected = False
+            if str(member.get("character", "")).strip():
+                any_selected = True
                 break
-        if not all_selected:
+        if not any_selected:
             return None
 
         pending = dict(lobby.pending_match)
-        queue_entries = [{"lobby_code": lobby.code, "queued_at": time.time(), "region": lobby.region, "rating": int(next(iter(lobby.members.values()), {}).get("rating", 1000))}]
+        target_players = int(pending.get("target_players", lobby.max_players))
+
+        # Compute how many bot slots are needed to reach the target player count.
+        current_humans = max(0, len(lobby.members))
+        bot_count = max(0, target_players - current_humans)
+
+        queue_entries = [{
+            "lobby_code": lobby.code,
+            "queued_at": time.time(),
+            "region": lobby.region,
+            "rating": int(next(iter(lobby.members.values()), {}).get("rating", 1000)),
+        }]
+
         final_match = self._emit_match_found(
             queue_entries,
-            target_players=int(pending.get("target_players", lobby.max_players)),
-            bot_count=int(pending.get("bot_count", 0)),
+            target_players=target_players,
+            bot_count=int(bot_count),
             pending_config=False,
             match_config=lobby.match_config,
             match_id=str(pending.get("match_id", "")) or None,

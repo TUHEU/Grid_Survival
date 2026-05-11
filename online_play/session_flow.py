@@ -442,11 +442,10 @@ def wait_for_internet_match_finalization(
 
         draw_lobby_panel(
             screen,
-            "FINALIZING MATCH",
+            "PREPARING MATCH",
             [
-                "Waiting for all players to confirm characters.",
+                "Preparing your match. Please wait...",
                 f"Match {safe_match_id or 'pending'}",
-                "Press ESC to cancel.",
             ],
             accent=(166, 120, 255),
             audio_overlay=audio_overlay,
