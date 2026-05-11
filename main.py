@@ -291,6 +291,7 @@ def main():
                     participant_names: list[str] | None = None,
                     initial_selections: list[str | None] | None = None,
                     current_player_index: int | None = None,
+                    selection_sync_provider=None,
                 ):
                     char_select = PlayerSelectionScreen(
                         screen,
@@ -300,6 +301,7 @@ def main():
                         slot_names=list(participant_names or []),
                         initial_selections=list(initial_selections or []),
                         current_player_index=current_player_index,
+                        selection_sync_provider=selection_sync_provider,
                     )
                     selected = char_select.run()
                     if not selected and getattr(char_select, "quit_requested", False):

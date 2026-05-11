@@ -530,6 +530,36 @@ def _connect_internet_match(
                 participant_names.append(f"Player {len(participant_names) + 1}")
                 initial_selections.append(None)
 
+            def _selection_sync_provider() -> list[str | None]:
+                try:
+                    res = online_service.poll_or_ws_updates(player_name=player_name)
+                except Exception:
+                    return list(initial_selections)
+                if not res.get("ok"):
+                    return list(initial_selections)
+                lobby = res.get("lobby")
+                if not isinstance(lobby, dict):
+                    return list(initial_selections)
+                members = lobby.get("members")
+                if not isinstance(members, list):
+                    return list(initial_selections)
+                by_name: dict[str, str] = {}
+                for member in members:
+                    if not isinstance(member, dict):
+                        continue
+                    name = str(member.get("name", "")).strip()
+                    character = str(member.get("character", "")).strip()
+                    if name:
+                        by_name[name] = character
+                current = list(initial_selections)
+                for idx, slot_name in enumerate(participant_names[:desired_player_count]):
+                    value = by_name.get(slot_name, "").strip()
+                    if value:
+                        if idx >= len(current):
+                            current.extend([None] * (idx + 1 - len(current)))
+                        current[idx] = value
+                return current
+
             lobby_owner = str((getattr(party_lobby, "_lobby", {}) or {}).get("owner", "")).strip()
             is_owner = lobby_owner == str(player_name).strip()
 
@@ -544,6 +574,7 @@ def _connect_internet_match(
                 participant_names,
                 initial_selections,
                 local_player_index,
+                _selection_sync_provider,
             )
             if not selected_characters:
                 return None
@@ -670,7 +701,7 @@ def run_online_session_setup(
     choose_player_count: Callable[[], int | None],
     choose_level: Callable[[], Any | None],
     choose_target_score: Callable[[], int | None],
-    choose_characters: Callable[[int, list[str] | None, list[str] | None, int | None], list[str] | None],
+    choose_characters: Callable[[int, list[str] | None, list[str] | None, int | None, Callable[[], list[str | None]] | None], list[str] | None],
     resolve_level_option: Callable[[int], Any | None],
     toast: Callable[[Any, Any, str], None] = toast_message,
 ) -> OnlineSessionSelection | None:

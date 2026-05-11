@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import pygame
 
@@ -134,7 +134,8 @@ class PlayerSelectionScreen:
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
                  game_mode: str, num_players: int = 1, slot_names: List[str] | None = None,
                  initial_selections: List[str | None] | None = None,
-                 current_player_index: int | None = None) -> None:
+                 current_player_index: int | None = None,
+                 selection_sync_provider: Callable[[], List[str | None]] | None = None) -> None:
         self.screen = screen
         self.clock = clock
         self.game_mode = game_mode
@@ -148,6 +149,8 @@ class PlayerSelectionScreen:
             self.slot_names.extend([f"Player {idx + 1}" for idx in range(len(self.slot_names), self.num_players)])
         self._status_text = ""
         self._status_ttl = 0.0
+        self._selection_sync_provider = selection_sync_provider
+        self._selection_sync_timer = 0.0
 
         self.mode_title, self.mode_hint = MODE_HEADERS.get(
             game_mode,
@@ -637,6 +640,21 @@ class PlayerSelectionScreen:
                 return idx
         return self.num_players
 
+    def _sync_external_selections(self) -> None:
+        if self._selection_sync_provider is None:
+            return
+        try:
+            synced = self._selection_sync_provider()
+        except Exception:
+            return
+        if not isinstance(synced, list):
+            return
+        for idx in range(min(self.num_players, len(synced))):
+            value = synced[idx]
+            text = str(value).strip() if value is not None else ""
+            if text:
+                self.selections[idx] = text
+
     def _move_active(self, delta: int) -> None:
         if not self.cards:
             return
@@ -739,6 +757,10 @@ class PlayerSelectionScreen:
 
         while True:
             dt = self.clock.tick(TARGET_FPS) / 1000.0
+            self._selection_sync_timer += dt
+            if self._selection_sync_timer >= 0.25:
+                self._selection_sync_timer = 0.0
+                self._sync_external_selections()
             self._update_card_states(dt)
 
             for event in pygame.event.get():
